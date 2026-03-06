@@ -37,6 +37,8 @@ jobs:
           pip install akshare
 
       - name: Fetch real market data
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           cmd=(python scripts/cloud_fetch.py --config config.yaml --output-dir cloud_outputs)
           if [ -n "${{ github.event.inputs.start_date }}" ]; then
