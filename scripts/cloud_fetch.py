@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import sys
 import time
@@ -13,7 +14,18 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from data.fetcher import AkshareFetcher, FetchConfig
+try:
+    from data.fetcher import AkshareFetcher, FetchConfig
+except ModuleNotFoundError:
+    # Fallback for CI runners where import path resolution is inconsistent.
+    fetcher_file = PROJECT_ROOT / "data" / "fetcher.py"
+    spec = importlib.util.spec_from_file_location("fetcher_module", fetcher_file)
+    if spec is None or spec.loader is None:
+        raise
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    AkshareFetcher = module.AkshareFetcher
+    FetchConfig = module.FetchConfig
 
 
 def load_config(path: Path) -> dict:
