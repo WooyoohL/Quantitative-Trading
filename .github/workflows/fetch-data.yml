@@ -1,0 +1,58 @@
+name: Cloud Fetch A-share Data
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Optional start date (YYYY-MM-DD)"
+        required: false
+        type: string
+      end_date:
+        description: "Optional end date (YYYY-MM-DD)"
+        required: false
+        type: string
+      history_days:
+        description: "Optional history days override"
+        required: false
+        default: "180"
+        type: string
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install akshare
+
+      - name: Fetch real market data
+        run: |
+          cmd=(python scripts/cloud_fetch.py --config config.yaml --output-dir cloud_outputs)
+          if [ -n "${{ github.event.inputs.start_date }}" ]; then
+            cmd+=(--start-date "${{ github.event.inputs.start_date }}")
+          fi
+          if [ -n "${{ github.event.inputs.end_date }}" ]; then
+            cmd+=(--end-date "${{ github.event.inputs.end_date }}")
+          fi
+          if [ -n "${{ github.event.inputs.history_days }}" ]; then
+            cmd+=(--history-days "${{ github.event.inputs.history_days }}")
+          fi
+          "${cmd[@]}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ashare-daily-data
+          path: cloud_outputs/
+          if-no-files-found: error

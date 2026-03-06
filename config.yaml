@@ -1,0 +1,68 @@
+seed: 7
+# If start/end are null, system auto uses [today - history_days, today].
+start_date: null
+end_date: null
+history_days: 180
+use_real_data: true
+fallback_to_synthetic: false
+# Candidate universe for auto pool selection (broader than final training pool).
+candidate_symbols:
+  - "600000.SH"
+  - "600036.SH"
+  - "600519.SH"
+  - "601318.SH"
+  - "601166.SH"
+  - "601988.SH"
+  - "000001.SZ"
+  - "000333.SZ"
+  - "000651.SZ"
+  - "000858.SZ"
+  - "002415.SZ"
+  - "002594.SZ"
+  - "300750.SZ"
+  - "300124.SZ"
+  - "300760.SZ"
+  - "688111.SH"
+  - "688981.SH"
+  - "603259.SH"
+  - "600276.SH"
+  - "600900.SH"
+# Fallback static symbols if universe.enabled=false.
+symbols:
+  - "600000.SH"
+  - "600036.SH"
+  - "600519.SH"
+  - "000001.SZ"
+  - "000333.SZ"
+  - "300750.SZ"
+universe:
+  enabled: true
+  lookback_days: 60
+  min_symbols: 8
+  max_symbols: 15
+  st_symbols: []
+  suspended_symbols: []
+  exclude_symbols: []
+  filters:
+    main_board_only: true
+    min_avg_turnover: 200000000
+    min_median_price: 3.0
+    max_median_price: 60.0
+    max_avg_intraday_range: 0.09
+    max_avg_abs_ret1: 0.05
+rolling:
+  train_days: 120
+  valid_days: 20
+  test_days: 20
+model:
+  hidden_dim: 32
+  epochs: 60
+  lr: 0.001
+  dropout: 0.1
+  l2: 0.01
+  use_torch: true
+strategy:
+  top_k: 2
+execution:
+  initial_cash: 10000
+  max_positions: 3
