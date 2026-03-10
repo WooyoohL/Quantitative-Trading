@@ -12,4 +12,6 @@ def simulate_rebalance(top_k_df: pd.DataFrame, cash: float, max_positions: int) 
     allocation = cash / max(1, n_pos)
     orders["action"] = "BUY"
     orders["target_notional"] = allocation
-    return orders[["date", "symbol", "action", "target_notional", "score"]]
+    base_columns = ["date", "symbol", "action", "target_notional", "score"]
+    optional_columns = [column for column in ["buy_price", "buy_price_basis", "entry_price_ref_close"] if column in orders.columns]
+    return orders[base_columns + optional_columns]

@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+
+data/eod_daily.csv
+data/eod_daily_meta.json
+data/current_candidates.csv
+data/index_daily.csv
+data/industry_map.csv
+data/industry_daily.csv
+
+outputs/runs/
+outputs/latest_run.json
+outputs/*.pt
+outputs/*.npz
+outputs/*.csv
