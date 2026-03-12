@@ -8,6 +8,8 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
+from data.splits import split_anchor_dates
+
 
 DEFAULT_INDEX_KEYS = ["sse", "szse", "hs300", "zz500", "cyb"]
 
@@ -203,7 +205,12 @@ class AlphaDatasetBuilder:
             )
 
         step_started = perf_counter()
-        split_dates = self._split_anchor_dates(feature_frame, train_days=train_days, valid_days=valid_days, test_days=test_days)
+        split_dates = split_anchor_dates(
+            feature_frame,
+            train_days=train_days,
+            valid_days=valid_days,
+            test_days=test_days,
+        )
         self._log(
             "锚点日期切分完成: "
             f"train={len(split_dates['train'])} valid={len(split_dates['valid'])} test={len(split_dates['test'])} "
@@ -395,11 +402,11 @@ class AlphaDatasetBuilder:
 
     def _attach_index_features(self, frame: pd.DataFrame, index_df: pd.DataFrame | None) -> pd.DataFrame:
         out = frame.copy()
-        for index_key in self.index_keys:
-            out[f"idx_{index_key}_ret_1"] = 0.0
-            out[f"idx_{index_key}_ret_5"] = 0.0
 
         if index_df is None or index_df.empty or not self.index_keys:
+            for index_key in self.index_keys:
+                out[f"idx_{index_key}_ret_1"] = 0.0
+                out[f"idx_{index_key}_ret_5"] = 0.0
             return out
 
         idx = index_df.copy()
@@ -679,29 +686,6 @@ class AlphaDatasetBuilder:
         for column in self.feature_columns:
             out[column] = pd.to_numeric(out[column], errors="coerce").fillna(fill_map.get(column, 0.0))
         return out.sort_values(["symbol", "date"]).reset_index(drop=True)
-
-    def _split_anchor_dates(
-        self,
-        frame: pd.DataFrame,
-        train_days: int,
-        valid_days: int,
-        test_days: int,
-    ) -> dict[str, list[pd.Timestamp]]:
-        usable = frame[frame["label"].notna()].copy()
-        anchor_dates = sorted(pd.to_datetime(usable["date"]).drop_duplicates())
-        needed = int(train_days) + int(valid_days) + int(test_days)
-        if len(anchor_dates) < needed:
-            raise ValueError(
-                f"Not enough anchor dates for split: have {len(anchor_dates)}, need at least {needed}. "
-                "Increase local history or reduce rolling windows."
-            )
-
-        train_end = len(anchor_dates) - valid_days - test_days
-        valid_end = len(anchor_dates) - test_days
-        train_dates = list(anchor_dates[train_end - train_days : train_end])
-        valid_dates = list(anchor_dates[train_end:valid_end])
-        test_dates = list(anchor_dates[valid_end:])
-        return {"train": train_dates, "valid": valid_dates, "test": test_dates}
 
     def _build_sequence_dataset(
         self,

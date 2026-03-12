@@ -24,6 +24,7 @@ from data.fetcher import (
     load_local_industry_map,
     load_local_stock_data,
     merge_time_series_frames,
+    merge_stock_turnover_columns,
     save_frame,
     write_json,
 )
@@ -34,7 +35,7 @@ def load_config(path: Path) -> dict:
         return yaml.safe_load(handle)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Update local stock, index, and industry data.")
     parser.add_argument("--config", type=Path, default=Path("config.yaml"))
     parser.add_argument(
@@ -48,7 +49,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional lookback window used together with --backfill-history.",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def build_fetcher(config: dict) -> AkshareFetcher:
@@ -380,6 +381,70 @@ def update_stock_data(
     return stock_df.sort_values(["symbol", "date"]).reset_index(drop=True), len(fetch_jobs)
 
 
+def update_stock_turnover_data(
+    fetcher: AkshareFetcher,
+    stock_df: pd.DataFrame,
+    universe_symbols: list[str],
+    target_end: pd.Timestamp,
+    history_days: int,
+    backfill_history: bool = False,
+) -> tuple[pd.DataFrame, int, int]:
+    if stock_df.empty or not universe_symbols:
+        return stock_df, 0, 0
+
+    update_calendar = resolve_update_calendar(fetcher, target_end=target_end, history_days=history_days)
+    if len(update_calendar) == 0:
+        return stock_df, 0, 0
+
+    retention_start = pd.Timestamp(update_calendar.min()).normalize()
+    scope = stock_df[
+        stock_df["symbol"].astype(str).isin(universe_symbols)
+        & (pd.to_datetime(stock_df["date"]).dt.normalize() >= retention_start)
+    ].copy()
+    if scope.empty:
+        return stock_df, 0, 0
+
+    turnover_missing = (
+        pd.to_numeric(scope["turnover_rate"], errors="coerce").isna()
+        | pd.to_numeric(scope["outstanding_share"], errors="coerce").isna()
+    )
+    missing_scope = scope[turnover_missing].copy()
+    if missing_scope.empty:
+        return stock_df, 0, 0
+
+    grouped_jobs: dict[tuple[str, str], list[str]] = {}
+    for symbol, symbol_df in missing_scope.groupby("symbol", sort=False):
+        symbol_dates = pd.to_datetime(symbol_df["date"]).dt.normalize()
+        start_date = symbol_dates.min().date().isoformat()
+        end_date = symbol_dates.max().date().isoformat()
+        if backfill_history:
+            start_date = retention_start.date().isoformat()
+            end_date = target_end.normalize().date().isoformat()
+        grouped_jobs.setdefault((start_date, end_date), []).append(str(symbol))
+
+    fetch_jobs = [(symbols, start_date, end_date) for (start_date, end_date), symbols in grouped_jobs.items()]
+    supplemented_rows = 0
+    for symbols, start_date, end_date in fetch_jobs:
+        if pd.Timestamp(start_date) > pd.Timestamp(end_date):
+            continue
+        try:
+            turnover_df = fetcher.fetch_stock_turnover_data(symbols=symbols, start_date=start_date, end_date=end_date)
+        except RuntimeError as exc:
+            if "no rows returned" in str(exc).lower():
+                print(
+                    "[DataUpdate] No stock turnover rows returned for this batch, skip it. "
+                    f"start={start_date} end={end_date} symbols={len(symbols)}"
+                )
+                continue
+            raise
+        supplemented_rows += int(len(turnover_df))
+        stock_df = merge_stock_turnover_columns(stock_df, turnover_df)
+
+    if not stock_df.empty:
+        stock_df = stock_df[pd.to_datetime(stock_df["date"]) >= retention_start].copy()
+    return stock_df.sort_values(["symbol", "date"]).reset_index(drop=True), len(fetch_jobs), supplemented_rows
+
+
 def update_index_data(
     fetcher: AkshareFetcher,
     index_df: pd.DataFrame,
@@ -462,8 +527,8 @@ def update_industry_data(
         return industry_map_df, pd.DataFrame(columns=INDUSTRY_DAILY_COLUMNS), f"failed: {exc}", 0
 
 
-def main() -> None:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     config = load_config(args.config)
     fetcher = build_fetcher(config)
 
@@ -538,6 +603,14 @@ def main() -> None:
         history_days=effective_history_days,
         backfill_history=bool(args.backfill_history),
     )
+    stock_df, stock_turnover_job_count, stock_turnover_rows = update_stock_turnover_data(
+        fetcher=fetcher,
+        stock_df=stock_df,
+        universe_symbols=universe_symbols,
+        target_end=target_end,
+        history_days=effective_history_days,
+        backfill_history=bool(args.backfill_history),
+    )
     save_frame(stock_df, stock_path, STOCK_EOD_COLUMNS, date_columns=["date"])
 
     candidate_frame = build_candidate_frame_from_local_eod(
@@ -598,6 +671,11 @@ def main() -> None:
         "industry_map_rows": int(len(industry_map_df)),
         "industry_daily_rows": int(len(industry_daily_df)),
         "stock_fetch_jobs": int(stock_job_count),
+        "stock_turnover_fetch_jobs": int(stock_turnover_job_count),
+        "stock_turnover_rows": int(stock_turnover_rows),
+        "stock_turnover_non_null": int(pd.to_numeric(stock_df["turnover_rate"], errors="coerce").notna().sum())
+        if not stock_df.empty
+        else 0,
         "index_fetch_jobs": int(index_job_count),
         "industry_missing_symbols_fetched": int(industry_missing_symbols),
         "latest_stock_date": str(pd.to_datetime(stock_df["date"]).max().date()) if not stock_df.empty else None,
@@ -620,6 +698,8 @@ def main() -> None:
     print(f"Backfill mode: {bool(args.backfill_history)}")
     print(f"Effective history days: {effective_history_days}")
     print(f"Stock fetch jobs: {stock_job_count}")
+    print(f"Stock turnover fetch jobs: {stock_turnover_job_count}")
+    print(f"Stock turnover supplemented rows: {stock_turnover_rows}")
     print(f"Index fetch jobs: {index_job_count}")
     print(f"Industry missing symbols fetched: {industry_missing_symbols}")
     print(f"Stock rows: {len(stock_df)}")

@@ -1,0 +1,61 @@
+experiments:
+  # Anchor: current best-known candidate
+  - name: rolling_anchor_60_30_20
+    overrides:
+      rolling:
+        train_days: 60
+        valid_days: 30
+        test_days: 20
+
+  # Validation window sweep around the current best train window
+  - name: rolling_valid_60_20_20
+    overrides:
+      rolling:
+        train_days: 60
+        valid_days: 20
+        test_days: 20
+
+  - name: rolling_valid_60_40_20
+    overrides:
+      rolling:
+        train_days: 60
+        valid_days: 40
+        test_days: 20
+
+  # Test window sweep around the current best train window
+  - name: rolling_test_60_30_30
+    overrides:
+      rolling:
+        train_days: 60
+        valid_days: 30
+        test_days: 30
+
+  - name: rolling_test_60_30_40
+    overrides:
+      rolling:
+        train_days: 60
+        valid_days: 30
+        test_days: 40
+
+  # Interaction checks: if valid/test changes, does train=60 still stay best?
+  - name: rolling_interact_80_20_20
+    overrides:
+      rolling:
+        train_days: 80
+        valid_days: 20
+        test_days: 20
+
+  - name: rolling_interact_80_40_20
+    overrides:
+      rolling:
+        train_days: 80
+        valid_days: 40
+        test_days: 20
+
+
+  - name: rolling_interact_80_30_30
+    overrides:
+      rolling:
+        train_days: 80
+        valid_days: 30
+        test_days: 30

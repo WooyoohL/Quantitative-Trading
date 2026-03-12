@@ -1,127 +1,148 @@
-# 项目重点说明
+# README Core
 
-这份文档只讲当前项目最关键的设计，不展开所有运行细节。完整操作说明见 [README.md](/D:/PyCharm%202025.3.3/projects/Quantitative%20Trading/README.md)。
+## 一句话说明
 
-## 这套项目在做什么
+这是一个基于本地 A 股日线数据做短周期 Top-K 选股的项目：
 
-目标不是做一个泛化的量化平台，而是把一条可执行的 A 股日线选股流程收敛成固定动作：
+- 每天更新本地数据
+- 用 rolling window 训练序列模型
+- 输出下一交易日的推荐股票和模拟订单
 
-1. 收盘后更新本地数据
-2. 基于本地 EOD 数据训练模型
-3. 给下一交易日输出少量候选股票和评估结果
+默认标签定义：
 
-这里预测的不是“明天收盘涨不涨”，而是：
-
-- `T` 日收盘后出信号
-- `T+1` 开盘买入
-- `T+1+h` 开盘卖出
-
-当前默认 `h=1`，也就是：
-
+- `T` 收盘后出信号
 - `T+1` 开盘买
 - `T+2` 开盘卖
 
-## 核心设计
+## 当前主流程
 
-### 1. 数据更新优先维护本地库
+### 1. 更新数据
 
-训练依赖的是本地数据文件，而不是训练时临时在线抓取。
+```powershell
+D:\anaconda3\envs\qt\python.exe scripts\update_eod_data.py
+```
 
-当前更新逻辑的关键点：
+### 2. 单次训练 + 推理
 
-- 以增量更新为主，不重复全量重抓
-- 股票、指数、行业数据分开落盘
-- 长期无新数据股票写入 `stale_symbols.csv`
-- 全市场股票列表接口失败时，优先回退到本地 `universe_snapshot.csv`
+```powershell
+D:\anaconda3\envs\qt\python.exe main.py train --config config.yaml
+```
 
-这意味着日常重点是先把本地库更新干净，再训练。
+输出目录：
 
-### 2. 模型输入不是单只股票的裸 K 线
+- `outputs/runs/<run_id>/`
 
-单个样本使用的是：
+最先看：
 
-- 某只股票在信号日 `T`
-- 最近 `seq_len` 个有效交易 bar 的特征序列
+- `summary.json`
+- `backtest_metrics.json`
+- `top_k.csv`
+- `orders.csv`
+- `run.log`
 
-当前特征不只包含个股量价，还包含：
+### 3. 用历史权重做当天推理
 
-- 市场横截面特征
-- 指数特征
-- 行业特征
-- peer 特征
+```powershell
+D:\anaconda3\envs\qt\python.exe main.py infer --source-run <run_id>
+```
 
-所以这是“带上下文的排序模型”，不是只看单票历史。
+### 4. 跑 batch 实验
 
-### 3. 模型输出是排序分数
+```powershell
+D:\anaconda3\envs\qt\python.exe main.py batch --experiment-file scripts\experiment_template_rolling_sweep.yaml --run-prefix rollinggrid
+```
 
-模型最终输出是一个标量 `score`。
+### 5. 分析 batch 结果
 
-- 分数越高，越看好未来可执行持有区间收益
-- 实际使用时按分数排序，再取前 `top_k`
+```powershell
+D:\anaconda3\envs\qt\python.exe main.py analyze --batch-dir outputs\batch_runs\<batch_dir_name>
+```
 
-## 当前两种模式
+### 6. 扫模型超参数
 
-### `trade`
+```powershell
+D:\anaconda3\envs\qt\python.exe main.py sweep --run-prefix modelgrid
+```
 
-服务于真实交易。
+### 7. 统一入口的其它命令
 
-- 训练股票池按交易域规则筛选
-- 上下文特征按训练池口径构造
-- 推理只在训练池内进行
-- 最终推荐也直接在训练池内排序
-- 不生成全市场 `market_rank.csv`
+```powershell
+D:\anaconda3\envs\qt\python.exe main.py update-data
+D:\anaconda3\envs\qt\python.exe main.py check-data
+```
 
-这套模式更强调“训练域、上下文、推荐域一致”。
+## 当前关键设计
 
-### `market_rank`
+### 1. 结构
 
-服务于全市场排序参考。
+- `app/`
+  - 配置、运行时、控制台摘要
+- `pipelines/`
+  - 训练上下文、评估、推荐输出
+- `data/`
+  - 特征工程与样本构造
+- `models/`
+  - 模型、loss、trainer
+- `strategy/`
+  - 股票池与回测
+- `scripts/`
+  - 数据更新、batch、分析、推理入口
 
-- 训练股票池使用较宽市场口径
-- 上下文按全市场统计
-- 推理走全市场
-- 会额外生成 `market_rank.csv`
+### 2. 选模
 
-这套模式更强调“全市场可解释性”。
+当前默认：
 
-## 当前已经解决的几个关键问题
+- `checkpoint_selection_mode = topk_valid`
 
-### 1. 训练池和候选池不再混为一谈
+它不是只看 `pooled valid_ic`，而是更贴近“最终只买推荐的 K 只股票”的目标。
 
-`current_candidates.csv` 不再默认反向裁掉整段训练历史。
+主要门槛：
 
-也就是说：
+- `valid_excess_return > 0`
+- `valid_positive_excess_rate >= 50%`
+- `valid_daily_ic > 0`
+- `valid_max_drawdown >= -10%`
 
-- 训练池决定哪些股票参与训练
-- 候选池只决定哪些股票可以进入最终推荐
+主要排序：
 
-### 2. stale 股票不删历史
+1. `valid_excess_return`
+2. `valid_positive_excess_rate`
+3. `valid_relative_return`
+4. `valid_daily_ic`
+5. `valid_head_daily_ic`
 
-长期无新数据股票会被排除出后续抓取和当期候选池，但历史行情仍然保留。
+### 3. 输出
 
-这样可以避免：
+控制台只打印核心摘要。详细信息统一写文件。
 
-- 用今天知道它停牌了这件事
-- 去改写它过去本来真实存在的训练样本
+核心文件：
 
-### 3. 停牌断层不会被强行拼接进训练
+- `summary.json`
+- `backtest_metrics.json`
+- `top_k.csv`
+- `orders.csv`
+- `run.log`
 
-训练池会额外约束最近连续交易段，避免长期停牌后复牌的股票把停牌前后数据硬拼成同一段序列。
+详细文件：
 
-## 你最该看什么
+- `train_metrics.csv`
+- `valid_predictions.csv`
+- `test_predictions.csv`
+- `valid_backtest.csv`
+- `backtest.csv`
+- `candidate_rank.csv`
+- `inference_predictions.csv`
+- `universe_report.csv`
 
-### 每次更新后先看
+## 当前阶段结论
 
-- [data/eod_daily_meta.json](/D:/PyCharm%202025.3.3/projects/Quantitative%20Trading/data/eod_daily_meta.json)
-- [data/current_candidates.csv](/D:/PyCharm%202025.3.3/projects/Quantitative%20Trading/data/current_candidates.csv)
+第一阶段重构已经把最乱的地方收住了：
 
-### 每次训练后先看
+- `main.py` 不再承担全部细节
+- `infer_from_run.py` 不再依赖 `main.py`
+- 训练、评估、推荐输出已经拆成共享 pipeline
 
-- [outputs/latest_run.json](/D:/PyCharm%202025.3.3/projects/Quantitative%20Trading/outputs/latest_run.json)
-- 最新 run 目录里的 `summary.json`
-- 最新 run 目录里的 `backtest_metrics.json`
-- 最新 run 目录里的 `top_k.csv`
+下一阶段更适合继续处理：
 
-## 一句话理解当前项目
-
-这是一套“收盘后更新本地数据 -> 用上下文特征训练排序模型 -> 给下一交易日输出少量候选股票”的 A 股日线选股流程，而不是一次性实验脚本。
+- `data/dataset.py` 的进一步拆分
+- 指标体系的更细模块化

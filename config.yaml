@@ -76,7 +76,7 @@ peer:
   min_overlap: 20
 
 rolling:
-  train_days: 90
+  train_days: 60
   valid_days: 30
   test_days: 20
 
@@ -87,12 +87,12 @@ sequence:
   seq_len: 20
 
 model:
-  name: "gru"
-  hidden_dim: 64
+  name: "attention"
+  hidden_dim: 256
   num_layers: 2
   epochs: 60
   lr: 0.0008
-  dropout: 0.3
+  dropout: 0.5
   attention_heads: 4
   ff_multiplier: 2
   max_seq_len: 64
@@ -102,6 +102,19 @@ model:
   log_every: 1
   early_stopping_patience: 10
   num_workers: 0
+  checkpoint_selection_mode: "topk_valid"  # "topk_valid" "valid_ic" "ic_gate_composite"
+  selection_top_k: 3
+  selection_ic_tolerance: 0.01
+  selection_weight_ic: 0.50
+  selection_weight_top_k_return: 0.25
+  selection_weight_hit_rate: 0.15
+  selection_weight_excess_return: 0.10
+  selection_head_top_n: 10
+  selection_min_excess_return: 0.0
+  selection_min_positive_excess_rate: 0.50
+  selection_min_daily_ic: 0.0
+  selection_min_head_daily_ic: -1.0
+  selection_max_drawdown_limit: -0.10
 
 strategy:
   top_k: 3

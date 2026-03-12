@@ -1,0 +1,28 @@
+experiments:
+  - name: gru_64x2_baseline
+    overrides:
+      model:
+        name: gru
+        hidden_dim: 64
+        num_layers: 2
+        dropout: 0.3
+
+  - name: lstm_64x2_seq30
+    overrides:
+      sequence:
+        seq_len: 30
+      model:
+        name: lstm
+        hidden_dim: 64
+        num_layers: 2
+        dropout: 0.2
+
+  - name: attention_80x2
+    overrides:
+      model:
+        name: attention
+        hidden_dim: 80
+        num_layers: 2
+        dropout: 0.1
+        attention_heads: 4
+        ff_multiplier: 2

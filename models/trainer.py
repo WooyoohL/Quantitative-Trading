@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -11,7 +12,9 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from data.dataset import SequenceDataset
-from models.loss_functions import rank_ic, PearsonLoss
+from metrics.selection import annotate_ic_gate_selection, annotate_topk_valid_selection
+from models.loss_functions import PearsonLoss, daily_rank_ic_mean, head_daily_rank_ic_mean, rank_ic
+from strategy.backtest import backtest_top_k, summarize_backtest
 
 
 @dataclass
@@ -25,6 +28,19 @@ class TrainerConfig:
     early_stopping_patience: int = 10
     num_workers: int = 0
     seed: int = 7
+    checkpoint_selection_mode: str = "valid_ic"
+    selection_top_k: int = 3
+    selection_ic_tolerance: float = 0.01
+    selection_weight_ic: float = 0.50
+    selection_weight_top_k_return: float = 0.25
+    selection_weight_hit_rate: float = 0.15
+    selection_weight_excess_return: float = 0.10
+    selection_head_top_n: int = 10
+    selection_min_excess_return: float = 0.0
+    selection_min_positive_excess_rate: float = 0.50
+    selection_min_daily_ic: float = 0.0
+    selection_min_head_daily_ic: float = -1.0
+    selection_max_drawdown_limit: float = -0.10
 
 
 class AlphaTrainer:
@@ -39,6 +55,7 @@ class AlphaTrainer:
             torch.cuda.manual_seed_all(int(config.seed))
 
         self.criterion = nn.MSELoss()
+        self.criterion_1 = PearsonLoss()
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=float(config.lr),
@@ -47,6 +64,12 @@ class AlphaTrainer:
         self.history: list[dict[str, float | int]] = []
         self.best_epoch = 0
         self.best_valid_ic = float("-inf")
+        self.best_valid_daily_ic = float("-inf")
+        self.monitor_best_valid_ic = float("-inf")
+        self.monitor_best_valid_daily_ic = float("-inf")
+        self.best_selection_score = float("nan")
+        self.selection_candidate_count = 0
+        self.best_selection_breakdown: dict[str, float | int] = {}
 
     def fit(
         self,
@@ -56,22 +79,37 @@ class AlphaTrainer:
         model_config: dict,
     ) -> pd.DataFrame:
         run_dir.mkdir(parents=True, exist_ok=True)
+        train_generator = torch.Generator()
+        train_generator.manual_seed(int(self.config.seed))
+        eval_generator = torch.Generator()
+        eval_generator.manual_seed(int(self.config.seed))
         train_loader = DataLoader(
             train_dataset,
             batch_size=int(self.config.batch_size),
             shuffle=True,
             num_workers=int(self.config.num_workers),
-            drop_last=False
+            drop_last=False,
+            generator=train_generator,
+            worker_init_fn=self._seed_worker,
         )
         valid_loader = DataLoader(
             valid_dataset,
             batch_size=int(self.config.eval_batch_size),
             shuffle=False,
             num_workers=int(self.config.num_workers),
-            drop_last=False
+            drop_last=False,
+            generator=eval_generator,
+            worker_init_fn=self._seed_worker,
         )
 
-        # 用验证集 IC 选择 best checkpoint，而不是只看训练损失。
+        checkpoint_mode = str(self.config.checkpoint_selection_mode).strip().lower()
+        use_composite_selection = checkpoint_mode == "ic_gate_composite"
+        use_topk_valid_selection = checkpoint_mode == "topk_valid"
+        monitor_daily_ic = use_topk_valid_selection
+        checkpoint_dir = run_dir / "epoch_checkpoints"
+        if use_composite_selection or use_topk_valid_selection:
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
         epochs_without_improvement = 0
         for epoch in range(1, int(self.config.epochs) + 1):
             train_loss = self._train_epoch(train_loader)
@@ -80,26 +118,72 @@ class AlphaTrainer:
 
             train_target = train_dataset.targets_numpy
             valid_target = valid_dataset.targets_numpy
+            train_dates = train_dataset.meta["date"].to_numpy() if "date" in train_dataset.meta.columns else np.asarray([])
+            valid_dates = valid_dataset.meta["date"].to_numpy() if "date" in valid_dataset.meta.columns else np.asarray([])
 
             train_ic = 0.0 if train_target is None else rank_ic(train_target, train_pred)
+            train_daily_ic = 0.0 if train_target is None or len(train_dates) != len(train_pred) else daily_rank_ic_mean(
+                train_target, train_pred, train_dates
+            )
             valid_loss = float("nan")
+            valid_mse_loss = float("nan")
+            valid_pearson_loss = float("nan")
             valid_ic = float("nan")
+            valid_daily_ic = float("nan")
+            valid_top_k_return = float("nan")
+            valid_hit_rate = float("nan")
+            valid_excess_return = float("nan")
+            valid_positive_excess_rate = float("nan")
+            valid_relative_return = float("nan")
+            valid_max_drawdown = float("nan")
+            valid_head_daily_ic = float("nan")
             if valid_target is not None and len(valid_target) > 0:
-                valid_loss = float(np.mean((valid_pred - valid_target) ** 2))
+                valid_mse_loss, valid_pearson_loss, valid_loss = self._compute_loss_metrics(valid_pred, valid_target)
                 valid_ic = rank_ic(valid_target, valid_pred)
+                if len(valid_dates) == len(valid_pred):
+                    valid_daily_ic = daily_rank_ic_mean(valid_target, valid_pred, valid_dates)
+                    valid_head_daily_ic = head_daily_rank_ic_mean(
+                        valid_target,
+                        valid_pred,
+                        valid_dates,
+                        top_n=int(self.config.selection_head_top_n),
+                    )
+                selection_metrics = self._compute_selection_metrics(valid_dataset, valid_pred)
+                valid_top_k_return = float(selection_metrics["valid_top_k_return"])
+                valid_hit_rate = float(selection_metrics["valid_hit_rate"])
+                valid_excess_return = float(selection_metrics["valid_excess_return"])
+                valid_positive_excess_rate = float(selection_metrics["valid_positive_excess_rate"])
+                valid_relative_return = float(selection_metrics["valid_relative_return"])
+                valid_max_drawdown = float(selection_metrics["valid_max_drawdown"])
 
             record = {
                 "epoch": epoch,
                 "train_loss": float(train_loss),
                 "train_ic": float(train_ic),
+                "train_daily_ic": float(train_daily_ic),
                 "valid_loss": float(valid_loss),
+                "valid_mse_loss": float(valid_mse_loss),
+                "valid_pearson_loss": float(valid_pearson_loss),
                 "valid_ic": float(valid_ic),
+                "valid_daily_ic": float(valid_daily_ic),
+                "valid_top_k_return": valid_top_k_return,
+                "valid_hit_rate": valid_hit_rate,
+                "valid_excess_return": valid_excess_return,
+                "valid_positive_excess_rate": valid_positive_excess_rate,
+                "valid_relative_return": valid_relative_return,
+                "valid_max_drawdown": valid_max_drawdown,
+                "valid_head_daily_ic": valid_head_daily_ic,
                 "lr": float(self.optimizer.param_groups[0]["lr"]),
             }
             self.history.append(record)
 
-            if valid_ic > self.best_valid_ic:
+            monitor_value = valid_daily_ic if monitor_daily_ic else valid_ic
+            best_monitor_value = self.monitor_best_valid_daily_ic if monitor_daily_ic else self.monitor_best_valid_ic
+            if monitor_value > best_monitor_value:
+                self.monitor_best_valid_ic = float(valid_ic)
+                self.monitor_best_valid_daily_ic = float(valid_daily_ic)
                 self.best_valid_ic = float(valid_ic)
+                self.best_valid_daily_ic = float(valid_daily_ic)
                 self.best_epoch = int(epoch)
                 epochs_without_improvement = 0
                 self._save_checkpoint(
@@ -111,6 +195,14 @@ class AlphaTrainer:
             else:
                 epochs_without_improvement += 1
 
+            if use_composite_selection or use_topk_valid_selection:
+                self._save_checkpoint(
+                    checkpoint_dir / f"epoch_{epoch:03d}.ckpt",
+                    epoch=epoch,
+                    metrics=record,
+                    model_config=model_config,
+                )
+
             self._save_checkpoint(
                 run_dir / "last.ckpt",
                 epoch=epoch,
@@ -121,16 +213,82 @@ class AlphaTrainer:
             if epoch == 1 or epoch % int(self.config.log_every) == 0 or epoch == int(self.config.epochs):
                 print(
                     f"[Train] epoch={epoch:03d}/{self.config.epochs} "
-                    f"train_loss={train_loss:.6f} train_ic={train_ic:.4f} "
-                    f"valid_loss={valid_loss:.6f} valid_ic={valid_ic:.4f}"
+                    f"train_loss={train_loss:.4f} "
+                    f"valid_loss={valid_loss:.4f} "
+                    f"valid_daily_ic={valid_daily_ic:.4f} "
+                    f"valid_excess={valid_excess_return:.4f} "
+                    f"valid_pos_excess={valid_positive_excess_rate:.2%}"
                 )
 
             if epochs_without_improvement >= int(self.config.early_stopping_patience):
-                print(f"[Train] early stopping at epoch={epoch}, best_valid_ic={self.best_valid_ic:.4f}")
+                best_monitor_label = "best_valid_daily_ic" if monitor_daily_ic else "best_valid_ic"
+                best_monitor_print = self.monitor_best_valid_daily_ic if monitor_daily_ic else self.monitor_best_valid_ic
+                print(f"[Train] early stopping at epoch={epoch}, {best_monitor_label}={best_monitor_print:.4f}")
                 break
 
         history_df = pd.DataFrame(self.history)
-        # 训练过程完整落盘，后续可以直接画 loss 和 IC 曲线。
+        if use_composite_selection and not history_df.empty:
+            final_monitor_best_valid_ic = float(self.monitor_best_valid_ic)
+            final_monitor_best_valid_daily_ic = float(self.monitor_best_valid_daily_ic)
+            history_df, selection_result = annotate_ic_gate_selection(
+                history_df,
+                selection_ic_tolerance=float(self.config.selection_ic_tolerance),
+                selection_weight_ic=float(self.config.selection_weight_ic),
+                selection_weight_top_k_return=float(self.config.selection_weight_top_k_return),
+                selection_weight_hit_rate=float(self.config.selection_weight_hit_rate),
+                selection_weight_excess_return=float(self.config.selection_weight_excess_return),
+            )
+            if selection_result is not None:
+                self.best_epoch = int(selection_result.epoch)
+                self.best_selection_score = float(selection_result.selection_score)
+                self.selection_candidate_count = int(selection_result.candidate_count)
+                self.best_selection_breakdown = dict(selection_result.breakdown)
+                self.load_checkpoint(checkpoint_dir / f"epoch_{self.best_epoch:03d}.ckpt")
+                self.monitor_best_valid_ic = final_monitor_best_valid_ic
+                self.monitor_best_valid_daily_ic = final_monitor_best_valid_daily_ic
+
+                selected_metrics = dict(self.history[self.best_epoch - 1])
+                selected_metrics["selection_score"] = float(self.best_selection_score)
+                selected_metrics["selection_candidate_count"] = int(self.selection_candidate_count)
+                selected_metrics["selection_breakdown"] = self.best_selection_breakdown
+                self._save_checkpoint(
+                    run_dir / "best.ckpt",
+                    epoch=self.best_epoch,
+                    metrics=selected_metrics,
+                    model_config=model_config,
+                )
+        elif use_topk_valid_selection and not history_df.empty:
+            final_monitor_best_valid_ic = float(self.monitor_best_valid_ic)
+            final_monitor_best_valid_daily_ic = float(self.monitor_best_valid_daily_ic)
+            history_df, selection_result = annotate_topk_valid_selection(
+                history_df,
+                selection_min_excess_return=float(self.config.selection_min_excess_return),
+                selection_min_positive_excess_rate=float(self.config.selection_min_positive_excess_rate),
+                selection_min_daily_ic=float(self.config.selection_min_daily_ic),
+                selection_min_head_daily_ic=float(self.config.selection_min_head_daily_ic),
+                selection_max_drawdown_limit=float(self.config.selection_max_drawdown_limit),
+                selection_head_top_n=int(self.config.selection_head_top_n),
+            )
+            if selection_result is not None:
+                self.best_epoch = int(selection_result.epoch)
+                self.best_selection_score = float(selection_result.selection_score)
+                self.selection_candidate_count = int(selection_result.candidate_count)
+                self.best_selection_breakdown = dict(selection_result.breakdown)
+                self.load_checkpoint(checkpoint_dir / f"epoch_{self.best_epoch:03d}.ckpt")
+                self.monitor_best_valid_ic = final_monitor_best_valid_ic
+                self.monitor_best_valid_daily_ic = final_monitor_best_valid_daily_ic
+
+                selected_metrics = dict(self.history[self.best_epoch - 1])
+                selected_metrics["selection_score"] = float(self.best_selection_score)
+                selected_metrics["selection_candidate_count"] = int(self.selection_candidate_count)
+                selected_metrics["selection_breakdown"] = self.best_selection_breakdown
+                self._save_checkpoint(
+                    run_dir / "best.ckpt",
+                    epoch=self.best_epoch,
+                    metrics=selected_metrics,
+                    model_config=model_config,
+                )
+
         history_df.to_csv(run_dir / "train_metrics.csv", index=False, encoding="utf-8-sig")
         self._write_trainer_state(run_dir, model_config=model_config)
         self.load_checkpoint(run_dir / "best.ckpt")
@@ -145,10 +303,9 @@ class AlphaTrainer:
             features = features.to(self.device)
             targets = targets.to(self.device)
 
-            # 标准 PyTorch 训练流程：forward -> loss -> backward -> step。
             self.optimizer.zero_grad(set_to_none=True)
             predictions = self.model(features)
-            loss = self.criterion(predictions, targets)
+            loss = self.criterion(predictions, targets) #+ self.criterion_1(predictions, targets)
             loss.backward()
             self.optimizer.step()
 
@@ -159,11 +316,15 @@ class AlphaTrainer:
         return total_loss / max(1, total_items)
 
     def predict_dataset(self, dataset: SequenceDataset) -> np.ndarray:
+        eval_generator = torch.Generator()
+        eval_generator.manual_seed(int(self.config.seed))
         loader = DataLoader(
             dataset,
             batch_size=int(self.config.eval_batch_size),
             shuffle=False,
             num_workers=int(self.config.num_workers),
+            generator=eval_generator,
+            worker_init_fn=self._seed_worker,
         )
         return self.predict_loader(loader)
 
@@ -184,12 +345,91 @@ class AlphaTrainer:
             return np.empty((0,), dtype=np.float32)
         return np.concatenate(predictions, axis=0).astype(np.float32)
 
+    @staticmethod
+    def _seed_worker(worker_id: int) -> None:
+        worker_seed = torch.initial_seed() % (2**32)
+        np.random.seed(worker_seed)
+        random.seed(worker_seed)
+
+    def _compute_selection_metrics(self, dataset: SequenceDataset, predictions: np.ndarray) -> dict[str, float]:
+        if dataset.meta.empty or "date" not in dataset.meta.columns or "label" not in dataset.meta.columns:
+            return {
+                "valid_top_k_return": float("nan"),
+                "valid_hit_rate": float("nan"),
+                "valid_excess_return": float("nan"),
+                "valid_positive_excess_rate": float("nan"),
+                "valid_relative_return": float("nan"),
+                "valid_max_drawdown": float("nan"),
+            }
+
+        scored = dataset.meta[["date", "label"]].copy()
+        scored["score"] = predictions
+        report = backtest_top_k(scored, top_k=int(self.config.selection_top_k))
+        summary = summarize_backtest(report)
+        return {
+            "valid_top_k_return": float(summary.get("top_k_mean_return") or 0.0),
+            "valid_hit_rate": float(summary.get("win_rate") or 0.0),
+            "valid_excess_return": float(summary.get("excess_mean_return") or 0.0),
+            "valid_positive_excess_rate": float(summary.get("positive_excess_rate") or 0.0),
+            "valid_relative_return": float(summary.get("relative_return") or 0.0),
+            "valid_max_drawdown": float(summary.get("max_drawdown") or 0.0),
+        }
+
+    def _compute_loss_metrics(self, predictions: np.ndarray, targets: np.ndarray) -> tuple[float, float, float]:
+        pred_tensor = torch.as_tensor(predictions, dtype=torch.float32, device=self.device)
+        target_tensor = torch.as_tensor(targets, dtype=torch.float32, device=self.device)
+        mse_loss = float(self.criterion(pred_tensor, target_tensor).detach().cpu().item())
+        pearson_loss = float(self.criterion_1(pred_tensor, target_tensor).detach().cpu().item())
+        total_loss = float(mse_loss + pearson_loss)
+        return mse_loss, pearson_loss, total_loss
+
+    def compute_eval_metrics(
+        self,
+        predictions: np.ndarray,
+        targets: np.ndarray | None,
+        dates: np.ndarray | None = None,
+    ) -> dict[str, float]:
+        if targets is None or len(targets) == 0:
+            return {
+                "mse_loss": float("nan"),
+                "pearson_loss": float("nan"),
+                "total_loss": float("nan"),
+                "ic": float("nan"),
+                "daily_ic": float("nan"),
+                "head_daily_ic": float("nan"),
+            }
+        mse_loss, pearson_loss, total_loss = self._compute_loss_metrics(predictions, targets)
+        daily_ic = float("nan")
+        head_daily_ic = float("nan")
+        if dates is not None and len(dates) == len(predictions):
+            daily_ic = float(daily_rank_ic_mean(targets, predictions, dates))
+            head_daily_ic = float(
+                head_daily_rank_ic_mean(
+                    targets,
+                    predictions,
+                    dates,
+                    top_n=int(self.config.selection_head_top_n),
+                )
+            )
+        return {
+            "mse_loss": float(mse_loss),
+            "pearson_loss": float(pearson_loss),
+            "total_loss": float(total_loss),
+            "ic": float(rank_ic(targets, predictions)),
+            "daily_ic": float(daily_ic),
+            "head_daily_ic": float(head_daily_ic),
+        }
+
     def _save_checkpoint(self, path: Path, epoch: int, metrics: dict, model_config: dict) -> None:
         payload = {
             "epoch": int(epoch),
             "metrics": metrics,
             "model_config": model_config,
             "trainer_config": asdict(self.config),
+            "trainer_state": {
+                "monitor_best_valid_ic": float(self.monitor_best_valid_ic),
+                "monitor_best_valid_daily_ic": float(self.monitor_best_valid_daily_ic),
+            },
             "model_state_dict": self.model.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "history": self.history,
@@ -205,6 +445,15 @@ class AlphaTrainer:
         self.best_epoch = int(payload.get("epoch", self.best_epoch))
         metrics = payload.get("metrics", {})
         self.best_valid_ic = float(metrics.get("valid_ic", self.best_valid_ic))
+        self.best_valid_daily_ic = float(metrics.get("valid_daily_ic", self.best_valid_daily_ic))
+        trainer_state = payload.get("trainer_state", {})
+        self.monitor_best_valid_ic = float(trainer_state.get("monitor_best_valid_ic", self.monitor_best_valid_ic))
+        self.monitor_best_valid_daily_ic = float(
+            trainer_state.get("monitor_best_valid_daily_ic", self.monitor_best_valid_daily_ic)
+        )
+        self.best_selection_score = float(metrics.get("selection_score", self.best_selection_score))
+        self.selection_candidate_count = int(metrics.get("selection_candidate_count", self.selection_candidate_count))
+        self.best_selection_breakdown = dict(metrics.get("selection_breakdown", self.best_selection_breakdown))
         self.model.to(self.device)
         self.model.eval()
         return payload
@@ -212,7 +461,14 @@ class AlphaTrainer:
     def _write_trainer_state(self, run_dir: Path, model_config: dict) -> None:
         payload = {
             "best_epoch": int(self.best_epoch),
-            "best_valid_ic": float(self.best_valid_ic),
+            "best_valid_ic": float(self.monitor_best_valid_ic),
+            "best_valid_daily_ic": float(self.monitor_best_valid_daily_ic),
+            "selected_epoch_valid_ic": float(self.best_valid_ic),
+            "selected_epoch_valid_daily_ic": float(self.best_valid_daily_ic),
+            "checkpoint_selection_mode": str(self.config.checkpoint_selection_mode),
+            "best_selection_score": None if not np.isfinite(self.best_selection_score) else float(self.best_selection_score),
+            "selection_candidate_count": int(self.selection_candidate_count),
+            "best_selection_breakdown": self.best_selection_breakdown,
             "trainer_config": asdict(self.config),
             "model_config": model_config,
         }

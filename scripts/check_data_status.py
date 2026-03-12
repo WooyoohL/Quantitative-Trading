@@ -26,10 +26,10 @@ def load_config(path: Path) -> dict:
         return yaml.safe_load(handle)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check local stock, index, and industry data status.")
     parser.add_argument("--config", type=Path, default=Path("config.yaml"))
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def read_json_if_exists(path: Path) -> dict:
@@ -85,8 +85,8 @@ def count_stale_symbols(
     return int((latest_rows["stale_trade_days"] > int(max_stale_trade_days)).sum())
 
 
-def main() -> None:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     config = load_config(args.config)
     data_cfg = config.get("data", {})
 

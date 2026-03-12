@@ -39,6 +39,13 @@ STOCK_EOD_COLUMNS = [
     "source",
 ]
 
+STOCK_TURNOVER_COLUMNS = [
+    "date",
+    "symbol",
+    "turnover_rate",
+    "outstanding_share",
+]
+
 INDEX_EOD_COLUMNS = [
     "date",
     "index_key",
@@ -84,6 +91,11 @@ NUMERIC_STOCK_COLUMNS = [
     "amplitude",
     "pct_chg",
     "chg",
+    "turnover_rate",
+    "outstanding_share",
+]
+
+NUMERIC_STOCK_TURNOVER_COLUMNS = [
     "turnover_rate",
     "outstanding_share",
 ]
@@ -163,7 +175,7 @@ def save_frame(df: pd.DataFrame, path: Path, columns: list[str], date_columns: l
     for column in columns:
         if column not in out.columns:
             out[column] = np.nan if column not in special else pd.NA
-    out[columns].to_csv(path, index=False, encoding="utf-8-sig")
+    out[columns].to_csv(path, index=False, encoding="utf-8")
 
 
 def merge_time_series_frames(existing_df: pd.DataFrame, new_df: pd.DataFrame, key_columns: list[str]) -> pd.DataFrame:
@@ -175,6 +187,33 @@ def merge_time_series_frames(existing_df: pd.DataFrame, new_df: pd.DataFrame, ke
     if "date" in merged.columns:
         merged["date"] = pd.to_datetime(merged["date"])
     return merged.drop_duplicates(subset=key_columns, keep="last").sort_values(key_columns).reset_index(drop=True)
+
+
+def merge_stock_turnover_columns(stock_df: pd.DataFrame, turnover_df: pd.DataFrame) -> pd.DataFrame:
+    if stock_df.empty or turnover_df.empty:
+        return stock_df.copy()
+
+    out = stock_df.copy()
+    supplement = turnover_df.copy()
+    out["date"] = pd.to_datetime(out["date"])
+    supplement["date"] = pd.to_datetime(supplement["date"])
+    supplement = supplement.drop_duplicates(subset=["symbol", "date"], keep="last")
+
+    merged = out.merge(
+        supplement,
+        on=["symbol", "date"],
+        how="left",
+        suffixes=("", "_sina"),
+    )
+
+    for column in ["turnover_rate", "outstanding_share"]:
+        supplement_column = f"{column}_sina"
+        merged[column] = pd.to_numeric(merged[column], errors="coerce")
+        merged[supplement_column] = pd.to_numeric(merged[supplement_column], errors="coerce")
+        merged[column] = merged[column].where(merged[column].notna(), merged[supplement_column])
+        merged = merged.drop(columns=[supplement_column])
+
+    return merged.sort_values(["symbol", "date"]).reset_index(drop=True)
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -254,14 +293,15 @@ class AkshareFetcher:
             if original_stock_tqdm is not None:
                 stock_tx_module.get_tqdm = original_stock_tqdm
 
-    def _collect_items(self, items: list, fetch_one, desc: str, unit: str) -> pd.DataFrame:
+    def _collect_items(self, items: list, fetch_one, desc: str, unit: str, max_workers: int | None = None) -> pd.DataFrame:
         frames: list[pd.DataFrame] = []
         errors: list[str] = []
         empty_items: list[str] = []
         total = len(items)
         if total == 0:
             return pd.DataFrame()
-        max_workers = max(1, min(int(self.config.max_workers), total))
+        worker_limit = int(self.config.max_workers) if max_workers is None else int(max_workers)
+        max_workers = max(1, min(worker_limit, total))
         with self._progress_bar(total=total, desc=desc) as bar:
             if max_workers == 1:
                 try:
@@ -392,6 +432,14 @@ class AkshareFetcher:
     def fetch_daily_data(self, symbols: list[str], start_date: str, end_date: str) -> pd.DataFrame:
         return self.fetch_stock_daily_data(symbols, start_date, end_date)
 
+    def fetch_stock_turnover_data(self, symbols: list[str], start_date: str, end_date: str) -> pd.DataFrame:
+        if not symbols:
+            return pd.DataFrame(columns=STOCK_TURNOVER_COLUMNS)
+        if not self.config.use_real_data:
+            return pd.DataFrame(columns=STOCK_TURNOVER_COLUMNS)
+        out = self._fetch_stock_turnover_sina(symbols, start_date, end_date)
+        return _ensure_columns(out, STOCK_TURNOVER_COLUMNS, NUMERIC_STOCK_TURNOVER_COLUMNS)
+
     def _fetch_stock_daily_tx(self, symbols: list[str], start_date: str, end_date: str) -> pd.DataFrame:
         if ak is None:
             raise RuntimeError("akshare is not installed.")
@@ -468,6 +516,36 @@ class AkshareFetcher:
             ).dropna(subset=["date", "open", "high", "low", "close", "volume", "turnover"])
 
         out = self._collect_items(symbols, fetch_one, desc="Stock Daily", unit="symbol")
+        return out.sort_values(["symbol", "date"]).reset_index(drop=True)
+
+    def _fetch_stock_turnover_sina(self, symbols: list[str], start_date: str, end_date: str) -> pd.DataFrame:
+        if ak is None:
+            raise RuntimeError("akshare is not installed.")
+        start_ts = pd.Timestamp(start_date)
+        end_ts = pd.Timestamp(end_date)
+
+        def fetch_one(symbol: str) -> pd.DataFrame:
+            code, exch = symbol.split(".")
+            # Sina computes turnover from raw volume/outstanding_share; no price adjustment is needed here.
+            df = ak.stock_zh_a_daily(symbol=f"{exch.lower()}{code}", adjust="")
+            if df is None or df.empty:
+                return pd.DataFrame()
+            tmp = df.copy()
+            tmp["date"] = pd.to_datetime(tmp["date"])
+            tmp = tmp[(tmp["date"] >= start_ts) & (tmp["date"] <= end_ts)]
+            if tmp.empty:
+                return pd.DataFrame()
+            return pd.DataFrame(
+                {
+                    "date": tmp["date"],
+                    "symbol": symbol,
+                    "turnover_rate": pd.to_numeric(tmp["turnover"], errors="coerce"),
+                    "outstanding_share": pd.to_numeric(tmp["outstanding_share"], errors="coerce"),
+                }
+            ).dropna(subset=["date"])
+
+        # Sina daily uses JS decoding via py_mini_racer; high parallelism can crash the process with JS OOM.
+        out = self._collect_items(symbols, fetch_one, desc="Stock Turnover Sina", unit="symbol", max_workers=1)
         return out.sort_values(["symbol", "date"]).reset_index(drop=True)
 
     def _fetch_stock_daily_synthetic(self, symbols: list[str], start_date: str, end_date: str) -> pd.DataFrame:

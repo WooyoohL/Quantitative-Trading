@@ -24,6 +24,59 @@ def rank_ic(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.nan_to_num(corr))
 
 
+def daily_rank_ic_mean(y_true: np.ndarray, y_pred: np.ndarray, dates: np.ndarray) -> float:
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+    dates = np.asarray(dates)
+    if len(y_true) < 2 or len(y_true) != len(y_pred) or len(y_true) != len(dates):
+        return 0.0
+
+    daily_values: list[float] = []
+    for date_value in np.unique(dates):
+        mask = dates == date_value
+        if int(mask.sum()) < 2:
+            continue
+        daily_values.append(rank_ic(y_true[mask], y_pred[mask]))
+
+    if not daily_values:
+        return 0.0
+    return float(np.nan_to_num(np.mean(daily_values)))
+
+
+def head_daily_rank_ic_mean(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    dates: np.ndarray,
+    top_n: int,
+) -> float:
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+    dates = np.asarray(dates)
+    if len(y_true) < 2 or len(y_true) != len(y_pred) or len(y_true) != len(dates):
+        return 0.0
+
+    top_n = int(top_n)
+    if top_n <= 1:
+        return 0.0
+
+    daily_values: list[float] = []
+    for date_value in np.unique(dates):
+        mask = dates == date_value
+        if int(mask.sum()) < 2:
+            continue
+        day_true = y_true[mask]
+        day_pred = y_pred[mask]
+        order = np.argsort(-day_pred)
+        head_order = order[: min(top_n, len(order))]
+        if len(head_order) < 2:
+            continue
+        daily_values.append(rank_ic(day_true[head_order], day_pred[head_order]))
+
+    if not daily_values:
+        return 0.0
+    return float(np.nan_to_num(np.mean(daily_values)))
+
+
 def sharpe_ratio(returns: np.ndarray, eps: float = 1e-9) -> float:
     returns = np.asarray(returns, dtype=float)
     std = returns.std()

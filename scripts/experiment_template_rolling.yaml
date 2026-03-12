@@ -1,0 +1,14 @@
+experiments:
+  - name: rolling_train_90_30_20
+    overrides:
+      rolling:
+        train_days: 90
+        valid_days: 30
+        test_days: 20
+
+  - name: rolling_train_80_30_20
+    overrides:
+      rolling:
+        train_days: 80
+        valid_days: 30
+        test_days: 20
