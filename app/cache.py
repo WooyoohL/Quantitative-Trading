@@ -12,7 +12,7 @@ import pandas as pd
 from data.dataset import DatasetBundle, FeatureScaler, SequenceDataset
 
 
-CACHE_VERSION = "training_context_v1"
+CACHE_VERSION = "training_context_v3"
 
 
 def _frame_signature(df: pd.DataFrame, *, entity_col: str | None = None) -> dict[str, Any]:
@@ -48,6 +48,7 @@ def build_training_context_cache_key(
         "data": {
             "label_horizon": config.get("data", {}).get("label_horizon", 1),
             "trainable_history_days": config.get("data", {}).get("trainable_history_days", 260),
+            "daily_cross_sectional_norm": bool(config.get("data", {}).get("daily_cross_sectional_norm", False)),
         },
         "universe": config.get("universe", {}),
         "index": config.get("index", {}),

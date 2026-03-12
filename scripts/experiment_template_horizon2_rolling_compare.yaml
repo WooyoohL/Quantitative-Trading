@@ -1,0 +1,54 @@
+experiments:
+  - name: h2_roll_60_30_20
+    overrides:
+      data:
+        label_horizon: 2
+      rolling:
+        train_days: 60
+        valid_days: 30
+        test_days: 20
+
+  - name: h2_roll_60_20_20
+    overrides:
+      data:
+        label_horizon: 2
+      rolling:
+        train_days: 60
+        valid_days: 20
+        test_days: 20
+
+  - name: h2_roll_60_40_20
+    overrides:
+      data:
+        label_horizon: 2
+      rolling:
+        train_days: 60
+        valid_days: 40
+        test_days: 20
+
+  - name: h2_roll_60_30_30
+    overrides:
+      data:
+        label_horizon: 2
+      rolling:
+        train_days: 60
+        valid_days: 30
+        test_days: 30
+
+  - name: h2_roll_80_30_20
+    overrides:
+      data:
+        label_horizon: 2
+      rolling:
+        train_days: 80
+        valid_days: 30
+        test_days: 20
+
+  - name: h2_roll_80_30_30
+    overrides:
+      data:
+        label_horizon: 2
+      rolling:
+        train_days: 80
+        valid_days: 30
+        test_days: 30

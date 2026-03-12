@@ -1,0 +1,64 @@
+experiments:
+  - name: attention_h128_l2_d03_head10
+    overrides:
+      sequence:
+        seq_len: 20
+      model:
+        name: attention
+        hidden_dim: 128
+        num_layers: 2
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01
+        attention_heads: 4
+        ff_multiplier: 2
+        max_seq_len: 64
+        selection_head_top_n: 10
+
+  - name: attention_h128_l2_d03_head5
+    overrides:
+      sequence:
+        seq_len: 20
+      model:
+        name: attention
+        hidden_dim: 128
+        num_layers: 2
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01
+        attention_heads: 4
+        ff_multiplier: 2
+        max_seq_len: 64
+        selection_head_top_n: 5
+
+  - name: attention_h64_l1_d03_head10
+    overrides:
+      sequence:
+        seq_len: 20
+      model:
+        name: attention
+        hidden_dim: 64
+        num_layers: 1
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01
+        attention_heads: 4
+        ff_multiplier: 2
+        max_seq_len: 64
+        selection_head_top_n: 10
+
+  - name: attention_h64_l1_d03_head5
+    overrides:
+      sequence:
+        seq_len: 20
+      model:
+        name: attention
+        hidden_dim: 64
+        num_layers: 1
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01
+        attention_heads: 4
+        ff_multiplier: 2
+        max_seq_len: 64
+        selection_head_top_n: 5

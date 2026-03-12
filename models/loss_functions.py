@@ -117,3 +117,101 @@ class PearsonLoss(nn.Module):
 
         # 我们希望 corr 越大越好（最大为 1），所以 Loss = 1 - corr
         return 1 - corr
+
+
+def _torch_rank(values: torch.Tensor) -> torch.Tensor:
+    order = torch.argsort(values)
+    ranks = torch.empty_like(order, dtype=torch.float32)
+    ranks[order] = torch.arange(values.numel(), device=values.device, dtype=torch.float32)
+    return ranks
+
+
+def soft_rank(values: torch.Tensor, tau: float = 1.0) -> torch.Tensor:
+    values = values.view(-1)
+    if values.numel() < 2:
+        return torch.ones_like(values, dtype=torch.float32)
+    temperature = max(float(tau), 1e-6)
+    diff = (values.unsqueeze(0) - values.unsqueeze(1)) / temperature
+    pairwise = torch.sigmoid(diff)
+    pairwise = pairwise - torch.diag_embed(torch.diagonal(pairwise))
+    return 1.0 + pairwise.sum(dim=1)
+
+
+class SoftRankICLoss(nn.Module):
+    def __init__(self, tau: float = 1.0, eps: float = 1e-8):
+        super().__init__()
+        self.tau = float(tau)
+        self.eps = float(eps)
+
+    def forward(self, y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
+        y_pred = y_pred.view(-1)
+        y_true = y_true.view(-1)
+        if y_pred.numel() < 2:
+            return torch.zeros((), device=y_pred.device, dtype=torch.float32)
+
+        pred_soft_rank = soft_rank(y_pred, tau=self.tau)
+        true_rank = _torch_rank(y_true.detach())
+
+        pred_centered = pred_soft_rank - pred_soft_rank.mean()
+        true_centered = true_rank - true_rank.mean()
+        numerator = torch.sum(pred_centered * true_centered)
+        denominator = torch.sqrt(
+            torch.sum(pred_centered ** 2) * torch.sum(true_centered ** 2) + self.eps
+        )
+        corr = numerator / denominator
+        return 1 - corr
+
+
+class HeadWeightedPairwiseLoss(nn.Module):
+    def __init__(
+        self,
+        tau: float = 1.0,
+        eps: float = 1e-8,
+        top_k_focus: int = 3,
+        head_boost: float = 3.0,
+        top_internal_boost: float = 1.5,
+        tail_weight: float = 0.0,
+    ):
+        super().__init__()
+        self.tau = float(tau)
+        self.eps = float(eps)
+        self.top_k_focus = int(top_k_focus)
+        self.head_boost = float(head_boost)
+        self.top_internal_boost = float(top_internal_boost)
+        self.tail_weight = float(tail_weight)
+
+    def forward(self, y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
+        y_pred = y_pred.view(-1)
+        y_true = y_true.view(-1)
+        if y_pred.numel() < 2:
+            return torch.zeros((), device=y_pred.device, dtype=torch.float32)
+
+        pred_diff = y_pred.unsqueeze(1) - y_pred.unsqueeze(0)
+        true_diff = y_true.unsqueeze(1) - y_true.unsqueeze(0)
+        sign = torch.sign(true_diff)
+        weight = torch.abs(true_diff)
+
+        order = torch.argsort(y_true, descending=True)
+        ranks = torch.empty_like(order, dtype=torch.long)
+        ranks[order] = torch.arange(y_true.numel(), device=y_true.device, dtype=torch.long)
+        top_mask = ranks < max(self.top_k_focus, 1)
+        top_i = top_mask.unsqueeze(1)
+        top_j = top_mask.unsqueeze(0)
+        top_any = top_i | top_j
+        top_both = top_i & top_j
+        top_vs_rest = top_any & (~top_both)
+
+        pair_multiplier = torch.full_like(weight, fill_value=max(self.tail_weight, 0.0), dtype=torch.float32)
+        pair_multiplier = torch.where(top_any, torch.ones_like(pair_multiplier), pair_multiplier)
+        pair_multiplier = torch.where(top_both, pair_multiplier * float(self.top_internal_boost), pair_multiplier)
+        pair_multiplier = torch.where(top_vs_rest, pair_multiplier * float(self.head_boost), pair_multiplier)
+        weight = weight * pair_multiplier
+        valid = sign != 0
+        valid = valid & (weight > 0)
+        if not torch.any(valid):
+            return torch.zeros((), device=y_pred.device, dtype=torch.float32)
+
+        logits = -sign[valid] * pred_diff[valid] / max(self.tau, self.eps)
+        losses = torch.nn.functional.softplus(logits)
+        weighted = weight[valid] * losses
+        return weighted.sum() / weight[valid].sum().clamp_min(self.eps)

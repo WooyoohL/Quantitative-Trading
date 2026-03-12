@@ -1,0 +1,52 @@
+experiments:
+  - name: baseline_attn_h128_l2_s20
+    overrides:
+      data:
+        daily_cross_sectional_norm: false
+      sequence:
+        seq_len: 20
+      model:
+        name: attention
+        hidden_dim: 128
+        num_layers: 2
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01
+        mse_loss_weight: 1.0
+        pearson_loss_weight: 0.0
+        soft_rank_loss_weight: 0.0
+        pairwise_loss_weight: 0.0
+        ranking_tau: 1.0
+        pairwise_top_k_focus: 3
+        pairwise_head_boost: 3.0
+        pairwise_top_internal_boost: 1.5
+        pairwise_tail_weight: 0.0
+        attention_heads: 4
+        ff_multiplier: 2
+        max_seq_len: 64
+
+  - name: top3_pairwise02_attn_h128_l2_s20
+    overrides:
+      data:
+        daily_cross_sectional_norm: false
+      sequence:
+        seq_len: 20
+      model:
+        name: attention
+        hidden_dim: 128
+        num_layers: 2
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01
+        mse_loss_weight: 1.0
+        pearson_loss_weight: 0.0
+        soft_rank_loss_weight: 0.0
+        pairwise_loss_weight: 0.2
+        ranking_tau: 1.0
+        pairwise_top_k_focus: 3
+        pairwise_head_boost: 6.0
+        pairwise_top_internal_boost: 2.0
+        pairwise_tail_weight: 0.0
+        attention_heads: 4
+        ff_multiplier: 2
+        max_seq_len: 64

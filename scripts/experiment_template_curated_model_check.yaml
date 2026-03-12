@@ -1,0 +1,81 @@
+experiments:
+  - name: attention_h64_l1_d03_s20_lr0p0008_wd0p01
+    overrides:
+      sequence:
+        seq_len: 20
+      model:
+        name: attention
+        hidden_dim: 64
+        num_layers: 1
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01
+        attention_heads: 4
+        ff_multiplier: 2
+        max_seq_len: 64
+
+  - name: attention_h128_l2_d03_s20_lr0p0008_wd0p01
+    overrides:
+      sequence:
+        seq_len: 20
+      model:
+        name: attention
+        hidden_dim: 128
+        num_layers: 2
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01
+        attention_heads: 4
+        ff_multiplier: 2
+        max_seq_len: 64
+
+  - name: attention_h64_l1_d01_s20_lr0p0008_wd0p01
+    overrides:
+      sequence:
+        seq_len: 20
+      model:
+        name: attention
+        hidden_dim: 64
+        num_layers: 1
+        dropout: 0.1
+        lr: 0.0008
+        weight_decay: 0.01
+        attention_heads: 4
+        ff_multiplier: 2
+        max_seq_len: 64
+
+  - name: gru_h64_l2_d03_s20_lr0p0008_wd0p01
+    overrides:
+      sequence:
+        seq_len: 20
+      model:
+        name: gru
+        hidden_dim: 64
+        num_layers: 2
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01
+
+  - name: gru_h256_l2_d03_s20_lr0p0008_wd0p01
+    overrides:
+      sequence:
+        seq_len: 20
+      model:
+        name: gru
+        hidden_dim: 256
+        num_layers: 2
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01
+
+  - name: lstm_h64_l1_d03_s20_lr0p0008_wd0p01
+    overrides:
+      sequence:
+        seq_len: 20
+      model:
+        name: lstm
+        hidden_dim: 64
+        num_layers: 1
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01

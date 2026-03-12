@@ -30,6 +30,47 @@ class RecommendationArtifacts:
     candidate_symbol_count: int | None
     recommendation_price_filter_applied: bool
     recommendation_max_latest_price: float | None
+    right_side_filter_applied: bool
+    right_side_filter_before_count: int | None
+    right_side_filter_after_count: int | None
+
+
+def _apply_right_side_filter(candidate_rank: pd.DataFrame, config: dict) -> tuple[pd.DataFrame, bool, int | None, int | None]:
+    filter_cfg = config.get("strategy", {}).get("right_side_filter", {})
+    if not bool(filter_cfg.get("enabled", False)):
+        return candidate_rank, False, None, None
+
+    out = candidate_rank.copy()
+    before_count = len(out)
+    rules: list[pd.Series] = []
+
+    def maybe_rule(column: str, threshold_key: str) -> None:
+        threshold = filter_cfg.get(threshold_key)
+        if threshold is None or column not in out.columns:
+            return
+        values = pd.to_numeric(out[column], errors="coerce")
+        rules.append(values >= float(threshold))
+
+    maybe_rule("ret_1", "min_ret_1")
+    maybe_rule("ret_5", "min_ret_5")
+    maybe_rule("intraday_ret", "min_intraday_ret")
+    maybe_rule("ma_gap_5", "min_ma_gap_5")
+    maybe_rule("volume_ratio_5", "min_volume_ratio_5")
+    maybe_rule("industry_ret_1_mean", "min_industry_ret_1_mean")
+
+    filtered = out
+    if rules:
+        mask = rules[0].copy()
+        for rule in rules[1:]:
+            mask &= rule
+        filtered = out[mask.fillna(False)].copy()
+
+    if filtered.empty:
+        log_step("右侧过滤后候选池为空，回退到未过滤候选池。")
+        return out, False, before_count, before_count
+
+    log_step(f"右侧过滤完成: before={before_count} after={len(filtered)}")
+    return filtered, True, before_count, len(filtered)
 
 
 def generate_recommendation_outputs(
@@ -130,7 +171,22 @@ def generate_recommendation_outputs(
             log_step(f"Trade 模式历史截面排序完成: count={len(candidate_rank)}")
 
     candidate_rank = candidate_rank[
-        ["signal_date", "symbol", "name", "industry_name", "score", "close", "market_rank", "candidate_rank"]
+        [
+            "signal_date",
+            "symbol",
+            "name",
+            "industry_name",
+            "score",
+            "close",
+            "market_rank",
+            "candidate_rank",
+            "ret_1",
+            "ret_5",
+            "intraday_ret",
+            "ma_gap_5",
+            "volume_ratio_5",
+            "industry_ret_1_mean",
+        ]
     ].copy()
     candidate_rank.to_csv(output_dir / "candidate_rank.csv", index=False, encoding="utf-8-sig")
 
@@ -148,6 +204,11 @@ def generate_recommendation_outputs(
         )
     if recommendation_pool.empty:
         raise ValueError("Recommendation pool became empty after final price filtering.")
+
+    recommendation_pool, right_side_filter_applied, right_side_before_count, right_side_after_count = _apply_right_side_filter(
+        recommendation_pool,
+        config,
+    )
 
     fetcher = build_fetcher(config)
     next_trade_date = fetcher.next_trade_date(signal_date)
@@ -170,6 +231,12 @@ def generate_recommendation_outputs(
             "buy_price",
             "buy_price_basis",
             "entry_price_ref_close",
+            "ret_1",
+            "ret_5",
+            "intraday_ret",
+            "ma_gap_5",
+            "volume_ratio_5",
+            "industry_ret_1_mean",
         ]
     ]
     latest_top_k.to_csv(output_dir / "top_k.csv", index=False, encoding="utf-8-sig")
@@ -195,4 +262,7 @@ def generate_recommendation_outputs(
         candidate_symbol_count=int(len(candidate_symbols)) if as_of_date is None else None,
         recommendation_price_filter_applied=bool(recommendation_price_filter_applied),
         recommendation_max_latest_price=float(max_recommend_price) if max_recommend_price is not None else None,
+        right_side_filter_applied=bool(right_side_filter_applied),
+        right_side_filter_before_count=right_side_before_count,
+        right_side_filter_after_count=right_side_after_count,
     )

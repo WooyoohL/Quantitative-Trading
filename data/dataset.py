@@ -141,6 +141,7 @@ class AlphaDatasetBuilder:
         peer_lookback_days: int = 60,
         peer_min_overlap: int = 20,
         feature_columns: list[str] | None = None,
+        daily_cross_sectional_norm: bool = False,
         verbose: bool = False,
         time_block_shuffle: bool = False,
         time_block_size: int | None = None,
@@ -154,6 +155,7 @@ class AlphaDatasetBuilder:
         self.peer_lookback_days = int(peer_lookback_days)
         self.peer_min_overlap = int(peer_min_overlap)
         self.feature_columns = list(feature_columns or build_feature_columns(self.index_keys))
+        self.daily_cross_sectional_norm = bool(daily_cross_sectional_norm)
         self.verbose = bool(verbose)
         self.time_block_shuffle = bool(time_block_shuffle)
         self.time_block_size = int(time_block_size or self.seq_len)
@@ -235,6 +237,8 @@ class AlphaDatasetBuilder:
         step_started = perf_counter()
         scaler = FeatureScaler.fit(scaler_fit_frame, self.feature_columns)
         scaled_frame = scaler.transform(feature_frame, self.feature_columns)
+        if self.daily_cross_sectional_norm:
+            scaled_frame = self._apply_daily_cross_sectional_norm(scaled_frame)
         self._log(
             f"标准化完成: rows={len(scaled_frame)} feature_dim={len(self.feature_columns)} "
             f"耗时={perf_counter() - step_started:.2f}s"
@@ -310,6 +314,8 @@ class AlphaDatasetBuilder:
         feature_frame = self._attach_peer_features(feature_frame, peer_map or {})
         feature_frame = self._finalize_feature_frame(feature_frame)
         scaled_frame = scaler.transform(feature_frame, self.feature_columns)
+        if self.daily_cross_sectional_norm:
+            scaled_frame = self._apply_daily_cross_sectional_norm(scaled_frame)
 
         target_signal_date = pd.Timestamp(signal_date).normalize() if signal_date is not None else pd.to_datetime(scaled_frame["date"]).max()
         inference_dataset = self._build_sequence_dataset(
@@ -687,6 +693,23 @@ class AlphaDatasetBuilder:
             out[column] = pd.to_numeric(out[column], errors="coerce").fillna(fill_map.get(column, 0.0))
         return out.sort_values(["symbol", "date"]).reset_index(drop=True)
 
+    def _apply_daily_cross_sectional_norm(self, frame: pd.DataFrame) -> pd.DataFrame:
+        out = frame.copy()
+        norm_columns = [
+            column
+            for column in self.feature_columns
+            if column not in MARKET_FEATURE_COLUMNS and not column.startswith("idx_")
+        ]
+        if not norm_columns:
+            return out
+
+        grouped = out.groupby("date")
+        means = grouped[norm_columns].transform("mean")
+        stds = grouped[norm_columns].transform("std").replace(0.0, np.nan)
+        normalized = (out[norm_columns] - means) / stds
+        out.loc[:, norm_columns] = normalized.replace([np.inf, -np.inf], np.nan).fillna(0.0).astype(np.float32)
+        return out
+
     def _build_sequence_dataset(
         self,
         frame: pd.DataFrame,
@@ -733,6 +756,12 @@ class AlphaDatasetBuilder:
                         "label": float(label_value) if not pd.isna(label_value) else np.nan,
                         "close": float(group.at[idx, "close"]),
                         "industry_name": group.at[idx, "industry_name"] if "industry_name" in group.columns else pd.NA,
+                        "ret_1": float(group.at[idx, "ret_1"]) if "ret_1" in group.columns and not pd.isna(group.at[idx, "ret_1"]) else np.nan,
+                        "ret_5": float(group.at[idx, "ret_5"]) if "ret_5" in group.columns and not pd.isna(group.at[idx, "ret_5"]) else np.nan,
+                        "intraday_ret": float(group.at[idx, "intraday_ret"]) if "intraday_ret" in group.columns and not pd.isna(group.at[idx, "intraday_ret"]) else np.nan,
+                        "ma_gap_5": float(group.at[idx, "ma_gap_5"]) if "ma_gap_5" in group.columns and not pd.isna(group.at[idx, "ma_gap_5"]) else np.nan,
+                        "volume_ratio_5": float(group.at[idx, "volume_ratio_5"]) if "volume_ratio_5" in group.columns and not pd.isna(group.at[idx, "volume_ratio_5"]) else np.nan,
+                        "industry_ret_1_mean": float(group.at[idx, "industry_ret_1_mean"]) if "industry_ret_1_mean" in group.columns and not pd.isna(group.at[idx, "industry_ret_1_mean"]) else np.nan,
                     }
                 )
 

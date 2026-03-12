@@ -1,0 +1,96 @@
+experiments:
+  - name: attn_h128_l2_s20_d03_lr8e4_wd1e2_p0
+    overrides:
+      sequence:
+        seq_len: 20
+      model:
+        name: attention
+        hidden_dim: 128
+        num_layers: 2
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01
+        pearson_loss_weight: 0.0
+        attention_heads: 4
+        ff_multiplier: 2
+        max_seq_len: 64
+
+  - name: attn_h128_l2_s20_d03_lr8e4_wd1e2_p02
+    overrides:
+      sequence:
+        seq_len: 20
+      model:
+        name: attention
+        hidden_dim: 128
+        num_layers: 2
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01
+        pearson_loss_weight: 0.2
+        attention_heads: 4
+        ff_multiplier: 2
+        max_seq_len: 64
+
+  - name: attn_h128_l2_s20_d03_lr8e4_wd1e2_p05
+    overrides:
+      sequence:
+        seq_len: 20
+      model:
+        name: attention
+        hidden_dim: 128
+        num_layers: 2
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01
+        pearson_loss_weight: 0.5
+        attention_heads: 4
+        ff_multiplier: 2
+        max_seq_len: 64
+
+  - name: attn_h128_l2_s20_d01_lr5e4_wd5e3_p02
+    overrides:
+      sequence:
+        seq_len: 20
+      model:
+        name: attention
+        hidden_dim: 128
+        num_layers: 2
+        dropout: 0.1
+        lr: 0.0005
+        weight_decay: 0.005
+        pearson_loss_weight: 0.2
+        attention_heads: 4
+        ff_multiplier: 2
+        max_seq_len: 64
+
+  - name: attn_h128_l2_s30_d03_lr8e4_wd1e2_p02
+    overrides:
+      sequence:
+        seq_len: 30
+      model:
+        name: attention
+        hidden_dim: 128
+        num_layers: 2
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01
+        pearson_loss_weight: 0.2
+        attention_heads: 4
+        ff_multiplier: 2
+        max_seq_len: 64
+
+  - name: attn_h256_l2_s20_d03_lr5e4_wd1e2_p02
+    overrides:
+      sequence:
+        seq_len: 20
+      model:
+        name: attention
+        hidden_dim: 256
+        num_layers: 2
+        dropout: 0.3
+        lr: 0.0005
+        weight_decay: 0.01
+        pearson_loss_weight: 0.2
+        attention_heads: 4
+        ff_multiplier: 2
+        max_seq_len: 64

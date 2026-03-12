@@ -12,8 +12,19 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from data.dataset import SequenceDataset
-from metrics.selection import annotate_ic_gate_selection, annotate_topk_valid_selection
-from models.loss_functions import PearsonLoss, daily_rank_ic_mean, head_daily_rank_ic_mean, rank_ic
+from metrics.selection import (
+    annotate_ic_gate_selection,
+    annotate_topk_valid_selection,
+    build_topk_valid_monitor_tuple,
+)
+from models.loss_functions import (
+    HeadWeightedPairwiseLoss,
+    PearsonLoss,
+    SoftRankICLoss,
+    daily_rank_ic_mean,
+    head_daily_rank_ic_mean,
+    rank_ic,
+)
 from strategy.backtest import backtest_top_k, summarize_backtest
 
 
@@ -21,7 +32,16 @@ from strategy.backtest import backtest_top_k, summarize_backtest
 class TrainerConfig:
     epochs: int = 60
     lr: float = 1e-3
+    mse_loss_weight: float = 1.0
     weight_decay: float = 1e-2
+    pearson_loss_weight: float = 0.0
+    soft_rank_loss_weight: float = 0.0
+    pairwise_loss_weight: float = 0.0
+    ranking_tau: float = 1.0
+    pairwise_top_k_focus: int = 3
+    pairwise_head_boost: float = 3.0
+    pairwise_top_internal_boost: float = 1.5
+    pairwise_tail_weight: float = 0.0
     batch_size: int = 256
     eval_batch_size: int = 512
     log_every: int = 1
@@ -56,6 +76,14 @@ class AlphaTrainer:
 
         self.criterion = nn.MSELoss()
         self.criterion_1 = PearsonLoss()
+        self.criterion_2 = SoftRankICLoss(tau=float(config.ranking_tau))
+        self.criterion_3 = HeadWeightedPairwiseLoss(
+            tau=float(config.ranking_tau),
+            top_k_focus=int(config.pairwise_top_k_focus),
+            head_boost=float(config.pairwise_head_boost),
+            top_internal_boost=float(config.pairwise_top_internal_boost),
+            tail_weight=float(config.pairwise_tail_weight),
+        )
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=float(config.lr),
@@ -106,13 +134,14 @@ class AlphaTrainer:
         use_composite_selection = checkpoint_mode == "ic_gate_composite"
         use_topk_valid_selection = checkpoint_mode == "topk_valid"
         monitor_daily_ic = use_topk_valid_selection
+        best_topk_monitor_tuple: tuple[float | int, ...] | None = None
         checkpoint_dir = run_dir / "epoch_checkpoints"
         if use_composite_selection or use_topk_valid_selection:
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         epochs_without_improvement = 0
         for epoch in range(1, int(self.config.epochs) + 1):
-            train_loss = self._train_epoch(train_loader)
+            train_loss = self._train_epoch(train_loader, train_dataset=train_dataset, epoch=epoch)
             train_pred = self.predict_dataset(train_dataset)
             valid_pred = self.predict_loader(valid_loader)
 
@@ -128,6 +157,8 @@ class AlphaTrainer:
             valid_loss = float("nan")
             valid_mse_loss = float("nan")
             valid_pearson_loss = float("nan")
+            valid_soft_rank_loss = float("nan")
+            valid_pairwise_loss = float("nan")
             valid_ic = float("nan")
             valid_daily_ic = float("nan")
             valid_top_k_return = float("nan")
@@ -138,7 +169,13 @@ class AlphaTrainer:
             valid_max_drawdown = float("nan")
             valid_head_daily_ic = float("nan")
             if valid_target is not None and len(valid_target) > 0:
-                valid_mse_loss, valid_pearson_loss, valid_loss = self._compute_loss_metrics(valid_pred, valid_target)
+                (
+                    valid_mse_loss,
+                    valid_pearson_loss,
+                    valid_soft_rank_loss,
+                    valid_pairwise_loss,
+                    valid_loss,
+                ) = self._compute_loss_metrics(valid_pred, valid_target, valid_dates)
                 valid_ic = rank_ic(valid_target, valid_pred)
                 if len(valid_dates) == len(valid_pred):
                     valid_daily_ic = daily_rank_ic_mean(valid_target, valid_pred, valid_dates)
@@ -164,6 +201,8 @@ class AlphaTrainer:
                 "valid_loss": float(valid_loss),
                 "valid_mse_loss": float(valid_mse_loss),
                 "valid_pearson_loss": float(valid_pearson_loss),
+                "valid_soft_rank_loss": float(valid_soft_rank_loss),
+                "valid_pairwise_loss": float(valid_pairwise_loss),
                 "valid_ic": float(valid_ic),
                 "valid_daily_ic": float(valid_daily_ic),
                 "valid_top_k_return": valid_top_k_return,
@@ -177,14 +216,29 @@ class AlphaTrainer:
             }
             self.history.append(record)
 
-            monitor_value = valid_daily_ic if monitor_daily_ic else valid_ic
-            best_monitor_value = self.monitor_best_valid_daily_ic if monitor_daily_ic else self.monitor_best_valid_ic
-            if monitor_value > best_monitor_value:
+            if use_topk_valid_selection:
+                current_topk_tuple = build_topk_valid_monitor_tuple(
+                    record,
+                    selection_min_excess_return=float(self.config.selection_min_excess_return),
+                    selection_min_positive_excess_rate=float(self.config.selection_min_positive_excess_rate),
+                    selection_min_daily_ic=float(self.config.selection_min_daily_ic),
+                    selection_min_head_daily_ic=float(self.config.selection_min_head_daily_ic),
+                    selection_max_drawdown_limit=float(self.config.selection_max_drawdown_limit),
+                )
+                improved = best_topk_monitor_tuple is None or current_topk_tuple > best_topk_monitor_tuple
+            else:
+                monitor_value = valid_daily_ic if monitor_daily_ic else valid_ic
+                best_monitor_value = self.monitor_best_valid_daily_ic if monitor_daily_ic else self.monitor_best_valid_ic
+                improved = monitor_value > best_monitor_value
+
+            if improved:
                 self.monitor_best_valid_ic = float(valid_ic)
                 self.monitor_best_valid_daily_ic = float(valid_daily_ic)
                 self.best_valid_ic = float(valid_ic)
                 self.best_valid_daily_ic = float(valid_daily_ic)
                 self.best_epoch = int(epoch)
+                if use_topk_valid_selection:
+                    best_topk_monitor_tuple = current_topk_tuple
                 epochs_without_improvement = 0
                 self._save_checkpoint(
                     run_dir / "best.ckpt",
@@ -221,9 +275,12 @@ class AlphaTrainer:
                 )
 
             if epochs_without_improvement >= int(self.config.early_stopping_patience):
-                best_monitor_label = "best_valid_daily_ic" if monitor_daily_ic else "best_valid_ic"
-                best_monitor_print = self.monitor_best_valid_daily_ic if monitor_daily_ic else self.monitor_best_valid_ic
-                print(f"[Train] early stopping at epoch={epoch}, {best_monitor_label}={best_monitor_print:.4f}")
+                if use_topk_valid_selection:
+                    print(f"[Train] early stopping at epoch={epoch}, best_topk_valid_epoch={self.best_epoch}")
+                else:
+                    best_monitor_label = "best_valid_daily_ic" if monitor_daily_ic else "best_valid_ic"
+                    best_monitor_print = self.monitor_best_valid_daily_ic if monitor_daily_ic else self.monitor_best_valid_ic
+                    print(f"[Train] early stopping at epoch={epoch}, {best_monitor_label}={best_monitor_print:.4f}")
                 break
 
         history_df = pd.DataFrame(self.history)
@@ -294,7 +351,18 @@ class AlphaTrainer:
         self.load_checkpoint(run_dir / "best.ckpt")
         return history_df
 
-    def _train_epoch(self, train_loader: DataLoader) -> float:
+    def _train_epoch(
+        self,
+        train_loader: DataLoader,
+        *,
+        train_dataset: SequenceDataset | None = None,
+        epoch: int = 1,
+    ) -> float:
+        if train_dataset is not None and (
+            float(self.config.soft_rank_loss_weight) > 0.0 or float(self.config.pairwise_loss_weight) > 0.0
+        ):
+            return self._train_epoch_grouped_by_date(train_dataset, epoch=epoch)
+
         self.model.train()
         total_loss = 0.0
         total_items = 0
@@ -305,13 +373,56 @@ class AlphaTrainer:
 
             self.optimizer.zero_grad(set_to_none=True)
             predictions = self.model(features)
-            loss = self.criterion(predictions, targets) #+ self.criterion_1(predictions, targets)
+            mse_loss = self.criterion(predictions, targets)
+            pearson_loss = self.criterion_1(predictions, targets)
+            loss = (
+                float(self.config.mse_loss_weight) * mse_loss
+                + float(self.config.pearson_loss_weight) * pearson_loss
+            )
             loss.backward()
             self.optimizer.step()
 
             batch_size = int(features.size(0))
             total_loss += float(loss.item()) * batch_size
             total_items += batch_size
+
+        return total_loss / max(1, total_items)
+
+    def _train_epoch_grouped_by_date(self, dataset: SequenceDataset, *, epoch: int) -> float:
+        self.model.train()
+        total_loss = 0.0
+        total_items = 0
+        dates = pd.to_datetime(dataset.meta["date"]).dt.normalize().to_numpy()
+        unique_dates = np.asarray(pd.unique(dates))
+        rng = np.random.default_rng(int(self.config.seed) + int(epoch))
+        ordered_dates = unique_dates[rng.permutation(len(unique_dates))]
+
+        for date_value in ordered_dates:
+            idx = np.flatnonzero(dates == date_value)
+            if idx.size < 2:
+                continue
+
+            features = torch.as_tensor(dataset.features[idx], dtype=torch.float32, device=self.device)
+            targets = torch.as_tensor(dataset.targets[idx], dtype=torch.float32, device=self.device)
+
+            self.optimizer.zero_grad(set_to_none=True)
+            predictions = self.model(features)
+
+            mse_loss = self.criterion(predictions, targets)
+            pearson_loss = self.criterion_1(predictions, targets)
+            soft_rank_loss = self.criterion_2(predictions, targets)
+            pairwise_loss = self.criterion_3(predictions, targets)
+            loss = (
+                float(self.config.mse_loss_weight) * mse_loss
+                + float(self.config.pearson_loss_weight) * pearson_loss
+                + float(self.config.soft_rank_loss_weight) * soft_rank_loss
+                + float(self.config.pairwise_loss_weight) * pairwise_loss
+            )
+            loss.backward()
+            self.optimizer.step()
+
+            total_loss += float(loss.item()) * int(idx.size)
+            total_items += int(idx.size)
 
         return total_loss / max(1, total_items)
 
@@ -375,13 +486,41 @@ class AlphaTrainer:
             "valid_max_drawdown": float(summary.get("max_drawdown") or 0.0),
         }
 
-    def _compute_loss_metrics(self, predictions: np.ndarray, targets: np.ndarray) -> tuple[float, float, float]:
+    def _compute_loss_metrics(
+        self,
+        predictions: np.ndarray,
+        targets: np.ndarray,
+        dates: np.ndarray | None = None,
+    ) -> tuple[float, float, float, float, float]:
         pred_tensor = torch.as_tensor(predictions, dtype=torch.float32, device=self.device)
         target_tensor = torch.as_tensor(targets, dtype=torch.float32, device=self.device)
         mse_loss = float(self.criterion(pred_tensor, target_tensor).detach().cpu().item())
         pearson_loss = float(self.criterion_1(pred_tensor, target_tensor).detach().cpu().item())
-        total_loss = float(mse_loss + pearson_loss)
-        return mse_loss, pearson_loss, total_loss
+        soft_rank_loss = float("nan")
+        pairwise_loss = float("nan")
+        if dates is not None and len(dates) == len(predictions):
+            date_values = np.asarray(dates)
+            soft_rank_losses: list[float] = []
+            pairwise_losses: list[float] = []
+            for date_value in np.unique(date_values):
+                mask = date_values == date_value
+                if int(mask.sum()) < 2:
+                    continue
+                day_pred = pred_tensor[mask]
+                day_target = target_tensor[mask]
+                soft_rank_losses.append(float(self.criterion_2(day_pred, day_target).detach().cpu().item()))
+                pairwise_losses.append(float(self.criterion_3(day_pred, day_target).detach().cpu().item()))
+            if soft_rank_losses:
+                soft_rank_loss = float(np.mean(soft_rank_losses))
+            if pairwise_losses:
+                pairwise_loss = float(np.mean(pairwise_losses))
+        total_loss = float(
+            float(self.config.mse_loss_weight) * mse_loss
+            + float(self.config.pearson_loss_weight) * pearson_loss
+            + float(self.config.soft_rank_loss_weight) * (0.0 if np.isnan(soft_rank_loss) else soft_rank_loss)
+            + float(self.config.pairwise_loss_weight) * (0.0 if np.isnan(pairwise_loss) else pairwise_loss)
+        )
+        return mse_loss, pearson_loss, soft_rank_loss, pairwise_loss, total_loss
 
     def compute_eval_metrics(
         self,
@@ -393,12 +532,18 @@ class AlphaTrainer:
             return {
                 "mse_loss": float("nan"),
                 "pearson_loss": float("nan"),
+                "soft_rank_loss": float("nan"),
+                "pairwise_loss": float("nan"),
                 "total_loss": float("nan"),
                 "ic": float("nan"),
                 "daily_ic": float("nan"),
                 "head_daily_ic": float("nan"),
             }
-        mse_loss, pearson_loss, total_loss = self._compute_loss_metrics(predictions, targets)
+        mse_loss, pearson_loss, soft_rank_loss, pairwise_loss, total_loss = self._compute_loss_metrics(
+            predictions,
+            targets,
+            dates,
+        )
         daily_ic = float("nan")
         head_daily_ic = float("nan")
         if dates is not None and len(dates) == len(predictions):
@@ -414,6 +559,8 @@ class AlphaTrainer:
         return {
             "mse_loss": float(mse_loss),
             "pearson_loss": float(pearson_loss),
+            "soft_rank_loss": float(soft_rank_loss),
+            "pairwise_loss": float(pairwise_loss),
             "total_loss": float(total_loss),
             "ic": float(rank_ic(targets, predictions)),
             "daily_ic": float(daily_ic),

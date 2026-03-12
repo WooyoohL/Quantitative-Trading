@@ -14,6 +14,51 @@ class SelectionResult:
     breakdown: dict[str, float | int]
 
 
+def topk_valid_rank_columns() -> list[str]:
+    return [
+        "valid_excess_return",
+        "valid_top_k_return",
+        "valid_positive_excess_rate",
+        "valid_head_daily_ic",
+        "valid_relative_return",
+        "valid_daily_ic",
+        "valid_max_drawdown",
+    ]
+
+
+def build_topk_valid_monitor_tuple(
+    metrics: dict[str, float | int],
+    *,
+    selection_min_excess_return: float,
+    selection_min_positive_excess_rate: float,
+    selection_min_daily_ic: float,
+    selection_min_head_daily_ic: float,
+    selection_max_drawdown_limit: float,
+) -> tuple[float | int, ...]:
+    valid_excess = float(metrics.get("valid_excess_return", float("-inf")))
+    valid_top_k = float(metrics.get("valid_top_k_return", float("-inf")))
+    valid_pos_excess = float(metrics.get("valid_positive_excess_rate", float("-inf")))
+    valid_head_ic = float(metrics.get("valid_head_daily_ic", float("-inf")))
+    valid_relative = float(metrics.get("valid_relative_return", float("-inf")))
+    valid_daily_ic = float(metrics.get("valid_daily_ic", float("-inf")))
+    valid_mdd = float(metrics.get("valid_max_drawdown", float("-inf")))
+
+    return (
+        int(valid_excess > float(selection_min_excess_return)),
+        int(valid_pos_excess >= float(selection_min_positive_excess_rate)),
+        int(valid_daily_ic > float(selection_min_daily_ic)),
+        int(valid_head_ic >= float(selection_min_head_daily_ic)),
+        int(valid_mdd >= float(selection_max_drawdown_limit)),
+        valid_excess,
+        valid_top_k,
+        valid_pos_excess,
+        valid_head_ic,
+        valid_relative,
+        valid_daily_ic,
+        valid_mdd,
+    )
+
+
 def annotate_ic_gate_selection(
     history_df: pd.DataFrame,
     *,
@@ -144,15 +189,7 @@ def annotate_topk_valid_selection(
         return scored, None
 
     scored.loc[candidate_mask, "selection_candidate"] = 1.0
-    rank_columns = [
-        "valid_excess_return",
-        "valid_top_k_return",
-        "valid_positive_excess_rate",
-        "valid_head_daily_ic",
-        "valid_relative_return",
-        "valid_daily_ic",
-        "valid_max_drawdown",
-    ]
+    rank_columns = topk_valid_rank_columns()
     for index, (_, row) in enumerate(
         candidates.sort_values(
             rank_columns + ["epoch"],

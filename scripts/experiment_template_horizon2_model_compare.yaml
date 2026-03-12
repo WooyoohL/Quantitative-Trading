@@ -1,0 +1,93 @@
+experiments:
+  - name: h2_attn_h128_l2_s20
+    overrides:
+      data:
+        label_horizon: 2
+      model:
+        name: attention
+        hidden_dim: 128
+        num_layers: 2
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01
+        attention_heads: 4
+        ff_multiplier: 2
+        max_seq_len: 64
+      sequence:
+        seq_len: 20
+
+  - name: h2_attn_h64_l1_s20
+    overrides:
+      data:
+        label_horizon: 2
+      model:
+        name: attention
+        hidden_dim: 64
+        num_layers: 1
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01
+        attention_heads: 4
+        ff_multiplier: 2
+        max_seq_len: 64
+      sequence:
+        seq_len: 20
+
+  - name: h2_attn_h256_l2_s20
+    overrides:
+      data:
+        label_horizon: 2
+      model:
+        name: attention
+        hidden_dim: 256
+        num_layers: 2
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01
+        attention_heads: 4
+        ff_multiplier: 2
+        max_seq_len: 64
+      sequence:
+        seq_len: 20
+
+  - name: h2_gru_h64_l1_s20
+    overrides:
+      data:
+        label_horizon: 2
+      model:
+        name: gru
+        hidden_dim: 64
+        num_layers: 1
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01
+      sequence:
+        seq_len: 20
+
+  - name: h2_gru_h128_l2_s20
+    overrides:
+      data:
+        label_horizon: 2
+      model:
+        name: gru
+        hidden_dim: 128
+        num_layers: 2
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01
+      sequence:
+        seq_len: 20
+
+  - name: h2_lstm_h128_l2_s20
+    overrides:
+      data:
+        label_horizon: 2
+      model:
+        name: lstm
+        hidden_dim: 128
+        num_layers: 2
+        dropout: 0.3
+        lr: 0.0008
+        weight_decay: 0.01
+      sequence:
+        seq_len: 20
