@@ -1,0 +1,20 @@
+experiments:
+  - name: seed_1375
+    overrides:
+      seed: 1375
+
+  - name: seed_7
+    overrides:
+      seed: 7
+
+  - name: seed_42
+    overrides:
+      seed: 42
+
+  - name: seed_2024
+    overrides:
+      seed: 2024
+
+  - name: seed_3407
+    overrides:
+      seed: 3407

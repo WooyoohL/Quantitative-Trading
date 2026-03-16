@@ -82,7 +82,7 @@ rolling:
   test_days: 20
 
 training:
-  mode: "trade" # market_rank / trade
+  mode: "trade"
 
 sequence:
   seq_len: 20
@@ -112,7 +112,7 @@ model:
   log_every: 1
   early_stopping_patience: 10
   num_workers: 0
-  checkpoint_selection_mode: "topk_valid"  # "topk_valid" "valid_ic" "ic_gate_composite"
+  checkpoint_selection_mode: "valid_ic"
   selection_top_k: 3
   selection_ic_tolerance: 0.01
   selection_weight_ic: 0.50

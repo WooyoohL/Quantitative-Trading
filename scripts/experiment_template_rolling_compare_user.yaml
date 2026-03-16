@@ -1,0 +1,42 @@
+experiments:
+  - name: rolling_60_20_20
+    overrides:
+      rolling:
+        train_days: 60
+        valid_days: 20
+        test_days: 20
+
+  - name: rolling_60_30_20
+    overrides:
+      rolling:
+        train_days: 60
+        valid_days: 30
+        test_days: 20
+
+  - name: rolling_60_30_30
+    overrides:
+      rolling:
+        train_days: 60
+        valid_days: 30
+        test_days: 30
+
+  - name: rolling_80_20_20
+    overrides:
+      rolling:
+        train_days: 80
+        valid_days: 20
+        test_days: 20
+
+  - name: rolling_80_20_30
+    overrides:
+      rolling:
+        train_days: 80
+        valid_days: 20
+        test_days: 30
+
+  - name: rolling_80_30_30
+    overrides:
+      rolling:
+        train_days: 80
+        valid_days: 30
+        test_days: 30
