@@ -77,7 +77,7 @@ peer:
   min_overlap: 20
 
 rolling:
-  train_days: 60
+  train_days: 80
   valid_days: 30
   test_days: 20
 

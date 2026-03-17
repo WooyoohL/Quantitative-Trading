@@ -11,6 +11,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
+from magma import Magma
+
 from data.dataset import SequenceDataset
 from metrics.selection import (
     annotate_ic_gate_selection,
@@ -89,6 +91,14 @@ class AlphaTrainer:
             lr=float(config.lr),
             weight_decay=float(config.weight_decay),
         )
+        # self.optimizer = Magma(
+        #     self.optimizer,
+        #     mask_prob=0.5,  # prob of keeping an update
+        #     tau=2.0,  # temperature for the alignment sigmoid
+        #     momentum_beta=0.9,  # EMA coefficient for gradient momentum
+        #     alignment_ema=0.9,  # EMA coefficient for smoothing the alignment score
+        # )
+
         self.history: list[dict[str, float | int]] = []
         self.best_epoch = 0
         self.best_valid_ic = float("-inf")
