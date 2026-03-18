@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures.thread import _worker
 from contextlib import contextmanager
 import json
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+import os
 from pathlib import Path
+import threading
+import weakref
 
 import numpy as np
 import pandas as pd
@@ -124,6 +128,29 @@ class FetchConfig:
     max_workers: int = 4
     request_timeout: float | None = 15.0
     show_progress: bool = True
+
+
+class InterruptSafeThreadPoolExecutor(ThreadPoolExecutor):
+    """Avoid hanging interpreter shutdown on Windows after Ctrl+C."""
+
+    def _adjust_thread_count(self):
+        if self._idle_semaphore.acquire(timeout=0):
+            return
+
+        def weakref_cb(_, q=self._work_queue):
+            q.put(None)
+
+        num_threads = len(self._threads)
+        if num_threads < self._max_workers:
+            thread_name = "%s_%d" % (self._thread_name_prefix or self, num_threads)
+            thread = threading.Thread(
+                name=thread_name,
+                target=_worker,
+                args=(weakref.ref(self, weakref_cb), self._work_queue, self._initializer, self._initargs),
+                daemon=True,
+            )
+            thread.start()
+            self._threads.add(thread)
 
 
 def _ensure_columns(df: pd.DataFrame, columns: list[str], numeric_columns: list[str]) -> pd.DataFrame:
@@ -261,7 +288,17 @@ class AkshareFetcher:
 
     @contextmanager
     def _progress_bar(self, total: int, desc: str):
-        bar = tqdm(total=total, desc=desc, unit="item", dynamic_ncols=True, leave=True) if self.config.show_progress and tqdm is not None else None
+        bar = (
+            tqdm(
+                total=total,
+                desc=desc,
+                unit="item",
+                dynamic_ncols=(os.name != "nt"),
+                leave=True,
+            )
+            if self.config.show_progress and tqdm is not None
+            else None
+        )
         try:
             yield bar
         finally:
@@ -322,8 +359,9 @@ class AkshareFetcher:
                         bar.write(f"[DataFetch] {desc} interrupted by user.")
                     raise
             else:
-                executor = ThreadPoolExecutor(max_workers=max_workers)
+                executor = InterruptSafeThreadPoolExecutor(max_workers=max_workers)
                 future_map = {}
+                interrupted = False
                 try:
                     future_map = {executor.submit(fetch_one, item): item for item in items}
                     for future in as_completed(future_map):
@@ -340,14 +378,14 @@ class AkshareFetcher:
                             bar.update(1)
                             bar.set_postfix_str(f"ok={len(frames)} empty={len(empty_items)} fail={len(errors)}")
                 except KeyboardInterrupt:
+                    interrupted = True
                     for future in future_map:
                         future.cancel()
-                    executor.shutdown(wait=False, cancel_futures=True)
                     if bar is not None:
                         bar.write(f"[DataFetch] {desc} interrupted by user. Pending tasks cancelled.")
                     raise
                 finally:
-                    executor.shutdown(wait=False, cancel_futures=True)
+                    executor.shutdown(wait=not interrupted, cancel_futures=interrupted)
         if not frames:
             detail_parts: list[str] = []
             if errors:

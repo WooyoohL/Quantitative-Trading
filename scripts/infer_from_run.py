@@ -8,6 +8,7 @@ import pandas as pd
 import torch
 
 from app.factories import build_trainer_config
+from app.interrupts import run_cli
 from app.reporting import assess_run_usability, print_inference_run_summary
 from app.runtime import configure_deterministic_training, load_config, resolve_training_frames, save_run_metadata
 from models.encoders import build_model
@@ -210,8 +211,4 @@ def main(argv: list[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n[Inference] User interrupted.")
-        raise SystemExit(130)
+    run_cli(main, label="Inference")

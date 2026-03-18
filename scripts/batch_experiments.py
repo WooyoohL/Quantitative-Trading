@@ -13,6 +13,8 @@ from typing import Any
 import pandas as pd
 import yaml
 
+from app.interrupts import run_cli
+
 
 DEFAULT_PRESETS: dict[str, list[dict[str, Any]]] = {
     "quick": [
@@ -520,8 +522,4 @@ def main(argv: list[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n[Batch] 用户中断，批量实验已停止。")
-        raise SystemExit(130)
+    run_cli(main, label="Batch")

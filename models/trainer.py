@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from magma import Magma
+# from magma import Magma
 
 from data.dataset import SequenceDataset
 from metrics.selection import (

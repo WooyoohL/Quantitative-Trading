@@ -6,6 +6,8 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
+from app.interrupts import run_cli
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export daily top-k picks from a test_predictions.csv file.")
@@ -80,8 +82,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n[ExportTopK] 用户中断，已停止。")
-        raise SystemExit(130)
+    run_cli(main, label="ExportTopK")

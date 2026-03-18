@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from app.interrupts import run_cli
 from data.fetcher import (
     AkshareFetcher,
     FetchConfig,
@@ -714,8 +715,8 @@ def main(argv: list[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n[DataUpdate] Interrupted by user. Remaining fetch tasks have been stopped.")
-        raise SystemExit(130)
+    run_cli(
+        main,
+        label="DataUpdate",
+        detail="User interrupted. Remaining fetch tasks have been stopped.",
+    )

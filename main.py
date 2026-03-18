@@ -9,6 +9,7 @@ import pandas as pd
 import torch
 
 from app.factories import build_trainer_config
+from app.interrupts import run_cli
 from app.reporting import print_training_run_summary
 from app.runtime import (
     configure_deterministic_training,
@@ -263,8 +264,4 @@ def dispatch_main(argv: list[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    try:
-        dispatch_main()
-    except KeyboardInterrupt:
-        print("\n[Train] User interrupted.")
-        raise SystemExit(130)
+    run_cli(dispatch_main, label="Train")
