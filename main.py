@@ -132,7 +132,11 @@ def run_training(args: argparse.Namespace, config: dict, run_dir: Path, as_of_da
         "right_side_filter_applied": recommendations.right_side_filter_applied,
         "right_side_filter_before_count": recommendations.right_side_filter_before_count,
         "right_side_filter_after_count": recommendations.right_side_filter_after_count,
-        "top_k_count": int(len(recommendations.latest_top_k)),
+        "review_top_k_target": int(recommendations.review_top_k_target),
+        "review_top_k_count": int(len(recommendations.review_top_k)),
+        "post_filter_applied": False,
+        "final_top_k_target": int(config["strategy"]["top_k"]),
+        "final_top_k_count": None,
         "n_train_samples": int(len(training_context.dataset_bundle.train_dataset)),
         "n_valid_samples": int(len(training_context.dataset_bundle.valid_dataset)),
         "n_test_samples": int(len(training_context.dataset_bundle.test_dataset)),
@@ -180,7 +184,7 @@ def run_training(args: argparse.Namespace, config: dict, run_dir: Path, as_of_da
         latest_run_path.parent.mkdir(parents=True, exist_ok=True)
         latest_run_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    print_training_run_summary(summary, history_df, recommendations.latest_top_k, run_dir)
+    print_training_run_summary(summary, history_df, recommendations.review_top_k, run_dir)
 
 
 def train_main(argv: list[str] | None = None) -> None:
@@ -265,3 +269,4 @@ def dispatch_main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":
     run_cli(dispatch_main, label="Train")
+

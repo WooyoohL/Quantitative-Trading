@@ -12,7 +12,6 @@ from app.runtime import (
     load_symbol_name_map,
     log_step,
 )
-from execution.mock_trader import simulate_rebalance
 from models.trainer import AlphaTrainer
 
 
@@ -24,6 +23,8 @@ class RecommendationArtifacts:
     market_rank: pd.DataFrame
     candidate_rank: pd.DataFrame
     recommendation_pool: pd.DataFrame
+    review_top_k: pd.DataFrame
+    review_top_k_target: int
     latest_top_k: pd.DataFrame
     orders: pd.DataFrame
     candidate_filter_applied: bool
@@ -213,12 +214,16 @@ def generate_recommendation_outputs(
     fetcher = build_fetcher(config)
     next_trade_date = fetcher.next_trade_date(signal_date)
 
-    latest_top_k = recommendation_pool.nsmallest(int(config["strategy"]["top_k"]), "candidate_rank").copy()
-    latest_top_k["next_trade_date"] = next_trade_date.date().isoformat()
-    latest_top_k = latest_top_k.rename(columns={"close": "buy_price"})
-    latest_top_k["buy_price_basis"] = "signal_close_ref"
-    latest_top_k["entry_price_ref_close"] = latest_top_k["buy_price"]
-    latest_top_k = latest_top_k[
+    strategy_cfg = config.get("strategy", {})
+    final_top_k = int(strategy_cfg["top_k"])
+    review_top_k_size = int(strategy_cfg.get("review_top_k", 20))
+
+    review_top_k = recommendation_pool.nsmallest(review_top_k_size, "candidate_rank").copy()
+    review_top_k["next_trade_date"] = next_trade_date.date().isoformat()
+    review_top_k = review_top_k.rename(columns={"close": "buy_price"})
+    review_top_k["buy_price_basis"] = "signal_close_ref"
+    review_top_k["entry_price_ref_close"] = review_top_k["buy_price"]
+    review_top_k = review_top_k[
         [
             "signal_date",
             "next_trade_date",
@@ -239,14 +244,22 @@ def generate_recommendation_outputs(
             "industry_ret_1_mean",
         ]
     ]
-    latest_top_k.to_csv(output_dir / "top_k.csv", index=False, encoding="utf-8-sig")
+    review_top_k.to_csv(output_dir / "review_top_k.csv", index=False, encoding="utf-8-sig")
 
-    orders = simulate_rebalance(
-        latest_top_k.rename(columns={"signal_date": "date"}),
-        cash=float(config["execution"]["initial_cash"]),
-        max_positions=int(config["execution"]["max_positions"]),
+    # 事件面 post filter 在 review_top_k 之后执行，这里只输出候选池，不直接生成最终交易单。
+    latest_top_k = review_top_k.copy()
+    orders = pd.DataFrame(
+        columns=[
+            "date",
+            "symbol",
+            "action",
+            "target_notional",
+            "score",
+            "buy_price",
+            "buy_price_basis",
+            "entry_price_ref_close",
+        ]
     )
-    orders.to_csv(output_dir / "orders.csv", index=False, encoding="utf-8-sig")
     universe_report.to_csv(output_dir / "universe_report.csv", index=False, encoding="utf-8-sig")
 
     return RecommendationArtifacts(
@@ -256,6 +269,8 @@ def generate_recommendation_outputs(
         market_rank=market_rank,
         candidate_rank=candidate_rank,
         recommendation_pool=recommendation_pool,
+        review_top_k=review_top_k,
+        review_top_k_target=review_top_k_size,
         latest_top_k=latest_top_k,
         orders=orders,
         candidate_filter_applied=bool(candidate_filter_applied),

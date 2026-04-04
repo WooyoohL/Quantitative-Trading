@@ -12,8 +12,7 @@ from metrics.decision import decide_recommendation
 CORE_ARTIFACTS = [
     "summary.json",
     "backtest_metrics.json",
-    "top_k.csv",
-    "orders.csv",
+    "review_top_k.csv",
     "run.log",
 ]
 
@@ -74,7 +73,12 @@ def _print_metric_table(summary: dict) -> None:
     test_bt = summary.get("backtest_metrics", {}) or {}
 
     rows = [
-        ("TopK", _render_metric_value(summary.get("top_k_count"), integer=True), _render_metric_value(summary.get("top_k_count"), integer=True), "与实盘一致"),
+        (
+            "ReviewPool",
+            _render_metric_value(summary.get("review_top_k_count"), integer=True),
+            _render_metric_value(summary.get("review_top_k_count"), integer=True),
+            _render_metric_value(summary.get("review_top_k_target"), integer=True),
+        ),
         ("回测天数", _render_metric_value(valid_bt.get("n_backtest_days"), integer=True), _render_metric_value(test_bt.get("n_backtest_days"), integer=True), ">= 20，>= 40 更稳"),
         ("组合胜率", _render_metric_value(valid_bt.get("win_rate"), percent=True), _render_metric_value(test_bt.get("win_rate"), percent=True), ">= 50%"),
         ("日均超额", _render_metric_value(valid_bt.get("excess_mean_return"), percent=True), _render_metric_value(test_bt.get("excess_mean_return"), percent=True), "> 0"),
@@ -118,7 +122,7 @@ def _print_metric_table(summary: dict) -> None:
         print(f"  {line}")
 
 
-def print_training_run_summary(summary: dict, history_df: pd.DataFrame, latest_top_k: pd.DataFrame, run_dir: Path) -> None:
+def print_training_run_summary(summary: dict, history_df: pd.DataFrame, review_top_k: pd.DataFrame, run_dir: Path) -> None:
     decision_label, reasons = assess_run_usability(summary)
 
     print(f"Run dir: {run_dir.resolve()}")
@@ -144,8 +148,12 @@ def print_training_run_summary(summary: dict, history_df: pd.DataFrame, latest_t
     print(f"[Conclusion] {decision_label}" + (f" | {'; '.join(reasons)}" if reasons else ""))
     print(f"[Artifacts] core: {', '.join(CORE_ARTIFACTS)}")
     print(f"[Artifacts] detail: {', '.join(DETAIL_ARTIFACTS)}")
-    print("[TopK]")
-    for _, row in latest_top_k.iterrows():
+    print(
+        f"[ReviewPool] count={summary.get('review_top_k_count', '-')} "
+        f"target={summary.get('review_top_k_target', '-')}"
+    )
+    print("[PostFilter] 未执行；请基于 review_top_k.csv 做事件面过滤后再形成最终 top_k.csv / orders.csv")
+    for _, row in review_top_k.iterrows():
         print(
             f"  - {row['symbol']} {row['name']} | {row['industry_name']} | "
             f"score={row['score']:.4f} | market={format_rank_value(row['market_rank'])} "
@@ -153,7 +161,7 @@ def print_training_run_summary(summary: dict, history_df: pd.DataFrame, latest_t
         )
 
 
-def print_inference_run_summary(summary: dict, latest_top_k: pd.DataFrame, output_dir: Path, source_run_dir: Path, checkpoint_name: str) -> None:
+def print_inference_run_summary(summary: dict, review_top_k: pd.DataFrame, output_dir: Path, source_run_dir: Path, checkpoint_name: str) -> None:
     print(f"Source run: {source_run_dir}")
     print(f"Checkpoint: {checkpoint_name}")
     print(f"Output dir: {output_dir}")
@@ -170,12 +178,17 @@ def print_inference_run_summary(summary: dict, latest_top_k: pd.DataFrame, outpu
         print(f"[SourceConclusion] {source_label}" + (f" | {'; '.join(source_reasons)}" if source_reasons else ""))
     print(
         f"[Inference] signal_date={summary['signal_date']} next_trade_date={summary['next_trade_date']} "
-        f"mode={summary['training_mode']} universe={summary['universe_size']} candidates={summary['candidate_rank_count']}"
+        f"mode={summary['training_mode']} universe={summary['universe_size']} candidates={summary['candidate_rank_count']} "
+        f"review_top_k={summary.get('review_top_k_count', '-')}"
     )
-    print("[Artifacts] core: summary.json, top_k.csv, orders.csv")
+    print("[Artifacts] core: summary.json, review_top_k.csv")
     print("[Artifacts] detail: inference_predictions.csv, candidate_rank.csv, universe_report.csv")
-    print("[TopK]")
-    for _, row in latest_top_k.iterrows():
+    print(
+        f"[ReviewPool] count={summary.get('review_top_k_count', '-')} "
+        f"target={summary.get('review_top_k_target', '-')}"
+    )
+    print("[PostFilter] 未执行；请基于 review_top_k.csv 做事件面过滤后再形成最终 top_k.csv / orders.csv")
+    for _, row in review_top_k.iterrows():
         print(
             f"  - {row['symbol']} {row['name']} | {row['industry_name']} | "
             f"score={row['score']:.4f} | market={format_rank_value(row['market_rank'])} "

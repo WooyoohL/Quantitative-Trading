@@ -21,14 +21,24 @@ def load_config(path: Path) -> dict[str, Any]:
         return yaml.safe_load(handle) or {}
 
 
+def rank_desc_score(series: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(series, errors="coerce")
+    valid = numeric.dropna()
+    result = pd.Series(np.nan, index=series.index, dtype=float)
+    if valid.empty:
+        return result.fillna(0.0)
+    raw_rank = valid.rank(method="average", ascending=False)
+    normalized = pd.Series(1.0, index=valid.index) if len(valid) == 1 else 1.0 - (raw_rank - 1.0) / float(len(valid) - 1)
+    result.loc[normalized.index] = normalized.astype(float)
+    return result.fillna(0.0)
+
+
 def compute_rightside_score(df: pd.DataFrame) -> pd.Series:
     return (
-        0.30 * df["ret_1"].astype(float)
-        + 0.25 * df["intraday_ret"].astype(float)
-        + 0.20 * df["ma_gap_5"].astype(float)
-        + 0.10 * df["volume_ratio_5"].astype(float)
-        + 0.10 * df["industry_ret_1_mean"].astype(float)
-        + 0.05 * df["ret_5"].astype(float)
+        0.40 * rank_desc_score(df["ma_gap_5"])
+        + 0.25 * rank_desc_score(df["intraday_ret"])
+        + 0.20 * rank_desc_score(df["volume_ratio_5"])
+        + 0.15 * rank_desc_score(df["industry_ret_1_mean"])
     )
 
 
@@ -42,24 +52,24 @@ def apply_right_side_filter(scored: pd.DataFrame, config: dict[str, Any]) -> pd.
     filter_cfg = config.get("strategy", {}).get("right_side_filter", {})
     if not bool(filter_cfg.get("enabled", False)):
         return out
+    if out.empty:
+        return out
 
     filtered = out.copy()
-    for column, threshold_key in [
-        ("ret_1", "min_ret_1"),
-        ("ret_5", "min_ret_5"),
-        ("intraday_ret", "min_intraday_ret"),
-        ("ma_gap_5", "min_ma_gap_5"),
-        ("volume_ratio_5", "min_volume_ratio_5"),
-        ("industry_ret_1_mean", "min_industry_ret_1_mean"),
-    ]:
-        threshold = filter_cfg.get(threshold_key)
-        if threshold is None or column not in filtered.columns:
+    rank_thresholds = [
+        ("ma_gap_5", 0.20),
+        ("intraday_ret", 0.20),
+        ("industry_ret_1_mean", 0.20),
+        ("volume_ratio_5", 0.15),
+    ]
+    for column, tail_cut in rank_thresholds:
+        if column not in filtered.columns:
             continue
-        values = pd.to_numeric(filtered[column], errors="coerce")
-        filtered = filtered[values >= float(threshold)].copy()
+        rank_score = rank_desc_score(filtered[column])
+        filtered = filtered[rank_score >= float(tail_cut)].copy()
+        if filtered.empty:
+            break
 
-    if filtered.empty:
-        return out
     return filtered
 
 
@@ -81,8 +91,10 @@ def backtest_filtered_reranked_top3(
         pool = apply_right_side_filter(preselected, config)
         pool = pool.copy()
         pool["rightside_score"] = compute_rightside_score(pool)
+        pool["model_rank_score"] = rank_desc_score(pool["score"])
+        pool["final_score"] = 0.70 * pool["model_rank_score"] + 0.30 * pool["rightside_score"]
         picks = pool.sort_values(
-            ["rightside_score", "score", "candidate_rank_proxy", "symbol"],
+            ["final_score", "score", "candidate_rank_proxy", "symbol"],
             ascending=[False, False, True, True],
         ).head(3)
         rows.append(

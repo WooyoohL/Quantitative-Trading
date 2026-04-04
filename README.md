@@ -2,13 +2,24 @@
 
 ## 项目定位
 
-这是一个面向 A 股短周期 `Top-K` 选股的研究与执行项目。当前主流程是：
+这是一个面向 A 股短周期 `Top-K` 选股的研究与执行项目。当前流程分成两条：
+
+日常执行流程：
 
 1. 更新本地日线数据
-2. 用 rolling window 训练模型
-3. 评估 valid / test 表现
-4. 生成下一交易日的推荐股票与模拟下单结果
-5. 用 batch 实验比较窗口、模型和超参数
+2. 检查数据状态
+3. 用已经选定的历史主模型做当天推理
+4. 生成 `review_top_k.csv` 候选池
+5. 按 `strategy/post_filter.md` 做事件面过滤
+6. 从 `Keep` 里按原始 `candidate_rank` 顺序取前 `top_k`
+
+研究流程：
+
+1. 更新本地日线数据
+2. 检查数据状态
+3. 跑 batch 实验比较窗口、模型和超参数
+4. 用 `analyze` 选择更适合作为候选池生成器的模型
+5. 把选定 run 作为后续日常 `infer --source-run ...` 的固定来源
 
 当前默认标签定义：
 
@@ -122,25 +133,31 @@ D:\anaconda3\envs\qt\python.exe main.py train --config config.yaml --shuffle-tim
 ### 4. 用历史 run 权重推理
 
 ```powershell
-D:\anaconda3\envs\qt\python.exe main.py infer --source-run 20260311_203338
+D:\anaconda3\envs\qt\python.exe main.py infer --source-run batch_20260405_001023_01_gru64x2_seed7
 ```
+
+说明：
+
+- `source-run` 指 `outputs/runs/` 下某个已经训练完成的 run 目录名，或它的完整路径
+- `infer` 不会重新训练，只会读取该 run 的 `config.yaml` 和 `best.ckpt`，基于最新数据生成当天候选池
+- 当前默认产物是 `review_top_k.csv`，不是最终交易单
 
 指定 checkpoint：
 
 ```powershell
-D:\anaconda3\envs\qt\python.exe main.py infer --source-run 20260311_203338 --checkpoint-name last.ckpt
+D:\anaconda3\envs\qt\python.exe main.py infer --source-run batch_20260405_001023_01_gru64x2_seed7 --checkpoint-name last.ckpt
 ```
 
 指定输出目录名：
 
 ```powershell
-D:\anaconda3\envs\qt\python.exe main.py infer --source-run 20260311_203338 --output-name infer_today
+D:\anaconda3\envs\qt\python.exe main.py infer --source-run batch_20260405_001023_01_gru64x2_seed7 --output-name infer_today
 ```
 
 做历史 `T` 日推理：
 
 ```powershell
-D:\anaconda3\envs\qt\python.exe main.py infer --source-run 20260311_203338 --as-of-date 2026-03-10
+D:\anaconda3\envs\qt\python.exe main.py infer --source-run batch_20260405_001023_01_gru64x2_seed7 --as-of-date 2026-03-10
 ```
 
 ### 5. 跑 batch 实验
@@ -172,6 +189,12 @@ D:\anaconda3\envs\qt\python.exe main.py analyze --batch-dir outputs\batch_runs\r
 - `analysis_results.csv`
 - `analysis_report.md`
 
+说明：
+
+- `analyze` 当前只评估模型的候选池生成能力
+- 它不评估 post filter 之后的最终交易名单
+- `analyze` 更适合研究选模，不是每日必跑步骤
+
 ### 7. 生成或运行模型超参数 sweep
 
 ```powershell
@@ -190,6 +213,35 @@ D:\anaconda3\envs\qt\python.exe main.py sweep --generate-only
 D:\anaconda3\envs\qt\python.exe main.py sweep --models gru,lstm,attention --hidden-dims 64,128,256 --num-layers 1,2 --dropouts 0.1,0.3 --seq-lens 20 --run-prefix modelgrid
 ```
 
+## 当前工作流
+
+### 日常执行
+
+日常不建议每天重跑 `batch + analyze`。当前更合理的执行顺序是：
+
+1. `python main.py update-data`
+2. `python main.py check-data`
+3. `python main.py infer --source-run <已选定主模型run>`
+4. 查看 `outputs/inference_runs/<...>/review_top_k.csv`
+5. 按 `strategy/post_filter.md` 做事件面过滤
+6. 从 `Keep` 里按原始 `candidate_rank` 顺序取前 `top_k`
+
+### 研究选模
+
+只有在你准备更换主模型时，才需要跑完整研究流程：
+
+1. `python main.py update-data`
+2. `python main.py check-data`
+3. `python main.py batch --experiment-file ...`
+4. `python main.py analyze --batch-dir ...`
+5. 从 `analysis_report.md` 里选择更适合作为候选池生成器的 run
+6. 后续日常推理固定用这个 run 做 `infer --source-run ...`
+
+### 当前产物语义
+
+- `review_top_k.csv`：模型候选池，已过价格与右侧过滤，但未过事件面过滤
+- `top_k.csv` / `orders.csv`：当前默认不再由训练 / 推理直接生成
+- `analysis_report.md`：当前只用于评估候选池生成能力，不直接代表最终可交易名单
 ## 当前默认训练与选模逻辑
 
 ### 默认 baseline
@@ -291,10 +343,11 @@ strategy:
 
 说明：
 
-- 右侧过滤只作用于**推荐池**
+- 右侧过滤只作用于**候选池**
 - 不改变训练样本
 - 不改变 valid/test 历史回测
-- 目的是把明显偏左侧、偏抄底的候选票从最终推荐里剔除
+- 当前训练 / 推理默认输出的是 `review_top_k.csv`
+- `review_top_k.csv` 仍然不是最终交易名单，后面还需要人工或外部模型执行 post filter
 
 当前过滤使用的是推理样本 meta 中的特征值：
 
@@ -338,8 +391,7 @@ D:\anaconda3\envs\qt\python.exe main.py train --config config_rightside_relaxed.
 
 - `summary.json`
 - `backtest_metrics.json`
-- `top_k.csv`
-- `orders.csv`
+- `review_top_k.csv`
 - `run.log`
 
 再看这些详细文件：
@@ -359,7 +411,8 @@ D:\anaconda3\envs\qt\python.exe main.py train --config config_rightside_relaxed.
 - valid / test 核心交易指标
 - `推荐 / 观察 / 不建议`
 - 核心与详细文件清单
-- 最新 `Top-K` 推荐
+- 最新 `ReviewPool` 候选池
+- `post filter` 尚未执行的提示
 
 ## Batch 加速
 
@@ -383,3 +436,5 @@ nvidia-smi dmon -s pucvmt -d 1
 ```
 
 如果 `sm` 长期只有 `15% ~ 30%`，可以尝试 `--max-jobs 2`。单卡下通常不建议直接开到 `3`。
+
+

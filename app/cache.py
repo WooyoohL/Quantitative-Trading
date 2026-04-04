@@ -12,7 +12,7 @@ import pandas as pd
 from data.dataset import DatasetBundle, FeatureScaler, SequenceDataset
 
 
-CACHE_VERSION = "training_context_v3"
+CACHE_VERSION = "training_context_v4"
 
 
 def _frame_signature(df: pd.DataFrame, *, entity_col: str | None = None) -> dict[str, Any]:
@@ -154,3 +154,4 @@ def save_training_context_cache(cache_path: Path, payload: dict[str, Any]) -> No
     with temp_path.open("wb") as handle:
         pickle.dump(serializable, handle, protocol=pickle.HIGHEST_PROTOCOL)
     os.replace(temp_path, cache_path)
+

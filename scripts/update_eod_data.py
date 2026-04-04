@@ -299,6 +299,16 @@ def build_stale_symbol_registry(stale_symbol_report: pd.DataFrame) -> pd.DataFra
     return out[["symbol", "latest_date", "stale_trade_days", "removed_at", "reason"]]
 
 
+def split_job_keys(keys: list[str], chunk_size: int | None) -> list[list[str]]:
+    normalized = [str(key) for key in keys if str(key)]
+    if not normalized:
+        return []
+    if chunk_size is None or int(chunk_size) <= 0:
+        return [normalized]
+    size = max(1, int(chunk_size))
+    return [normalized[start : start + size] for start in range(0, len(normalized), size)]
+
+
 def build_incremental_fetch_jobs(
     existing_df: pd.DataFrame,
     key_column: str,
@@ -306,6 +316,7 @@ def build_incremental_fetch_jobs(
     update_calendar: pd.DatetimeIndex,
     target_end: pd.Timestamp,
     backfill_history: bool = False,
+    max_keys_per_job: int | None = None,
 ) -> list[tuple[list[str], str, str]]:
     if len(update_calendar) == 0 or not target_keys:
         return []
@@ -339,7 +350,11 @@ def build_incremental_fetch_jobs(
 
         grouped_jobs.setdefault((start_date, end_date), []).append(key)
 
-    return [(symbols, start_date, end_date) for (start_date, end_date), symbols in grouped_jobs.items()]
+    jobs: list[tuple[list[str], str, str]] = []
+    for (start_date, end_date), keys in grouped_jobs.items():
+        for chunk in split_job_keys(keys, max_keys_per_job):
+            jobs.append((chunk, start_date, end_date))
+    return jobs
 
 
 def update_stock_data(
@@ -349,6 +364,8 @@ def update_stock_data(
     target_end: pd.Timestamp,
     history_days: int,
     backfill_history: bool = False,
+    persist_path: Path | None = None,
+    max_symbols_per_job: int | None = None,
 ) -> tuple[pd.DataFrame, int]:
     current_existing = stock_df[stock_df["symbol"].isin(universe_symbols)].copy() if not stock_df.empty else stock_df
     update_calendar = resolve_update_calendar(fetcher, target_end=target_end, history_days=history_days)
@@ -359,8 +376,10 @@ def update_stock_data(
         update_calendar=update_calendar,
         target_end=target_end,
         backfill_history=backfill_history,
+        max_keys_per_job=max_symbols_per_job,
     )
 
+    retention_start = pd.Timestamp(update_calendar.min()) if len(update_calendar) > 0 else target_end.normalize()
     for symbols, start_date, end_date in fetch_jobs:
         if pd.Timestamp(start_date) > pd.Timestamp(end_date):
             continue
@@ -375,8 +394,15 @@ def update_stock_data(
                 continue
             raise
         stock_df = merge_time_series_frames(stock_df, fetched, key_columns=["symbol", "date"])
+        if not stock_df.empty:
+            stock_df = stock_df[pd.to_datetime(stock_df["date"]) >= retention_start].copy()
+        if persist_path is not None and not fetched.empty:
+            save_frame(stock_df, persist_path, STOCK_EOD_COLUMNS, date_columns=["date"])
+            print(
+                "[DataUpdate] Stock batch persisted. "
+                f"start={start_date} end={end_date} symbols={len(symbols)} rows={len(stock_df)}"
+            )
 
-    retention_start = pd.Timestamp(update_calendar.min()) if len(update_calendar) > 0 else target_end.normalize()
     if not stock_df.empty:
         stock_df = stock_df[pd.to_datetime(stock_df["date"]) >= retention_start].copy()
     return stock_df.sort_values(["symbol", "date"]).reset_index(drop=True), len(fetch_jobs)
@@ -389,6 +415,8 @@ def update_stock_turnover_data(
     target_end: pd.Timestamp,
     history_days: int,
     backfill_history: bool = False,
+    persist_path: Path | None = None,
+    max_symbols_per_job: int | None = None,
 ) -> tuple[pd.DataFrame, int, int]:
     if stock_df.empty or not universe_symbols:
         return stock_df, 0, 0
@@ -423,7 +451,10 @@ def update_stock_turnover_data(
             end_date = target_end.normalize().date().isoformat()
         grouped_jobs.setdefault((start_date, end_date), []).append(str(symbol))
 
-    fetch_jobs = [(symbols, start_date, end_date) for (start_date, end_date), symbols in grouped_jobs.items()]
+    fetch_jobs: list[tuple[list[str], str, str]] = []
+    for (start_date, end_date), symbols in grouped_jobs.items():
+        for chunk in split_job_keys(symbols, max_symbols_per_job):
+            fetch_jobs.append((chunk, start_date, end_date))
     supplemented_rows = 0
     for symbols, start_date, end_date in fetch_jobs:
         if pd.Timestamp(start_date) > pd.Timestamp(end_date):
@@ -440,6 +471,14 @@ def update_stock_turnover_data(
             raise
         supplemented_rows += int(len(turnover_df))
         stock_df = merge_stock_turnover_columns(stock_df, turnover_df)
+        if not stock_df.empty:
+            stock_df = stock_df[pd.to_datetime(stock_df["date"]) >= retention_start].copy()
+        if persist_path is not None and not turnover_df.empty:
+            save_frame(stock_df, persist_path, STOCK_EOD_COLUMNS, date_columns=["date"])
+            print(
+                "[DataUpdate] Stock turnover batch persisted. "
+                f"start={start_date} end={end_date} symbols={len(symbols)} rows={len(stock_df)}"
+            )
 
     if not stock_df.empty:
         stock_df = stock_df[pd.to_datetime(stock_df["date"]) >= retention_start].copy()
@@ -453,6 +492,8 @@ def update_index_data(
     target_end: pd.Timestamp,
     history_days: int,
     backfill_history: bool = False,
+    persist_path: Path | None = None,
+    max_index_keys_per_job: int | None = None,
 ) -> tuple[pd.DataFrame, int]:
     index_cfg = config.get("index", {})
     if not index_cfg.get("enabled", True):
@@ -470,8 +511,10 @@ def update_index_data(
         update_calendar=update_calendar,
         target_end=target_end,
         backfill_history=backfill_history,
+        max_keys_per_job=max_index_keys_per_job,
     )
 
+    retention_start = pd.Timestamp(update_calendar.min()) if len(update_calendar) > 0 else target_end.normalize()
     for index_keys, start_date, end_date in fetch_jobs:
         selected_symbols = {index_key: index_symbols[index_key] for index_key in index_keys}
         try:
@@ -489,8 +532,15 @@ def update_index_data(
                 continue
             raise
         index_df = merge_time_series_frames(index_df, fetched_index, key_columns=["index_key", "date"])
+        if not index_df.empty:
+            index_df = index_df[pd.to_datetime(index_df["date"]) >= retention_start].copy()
+        if persist_path is not None and not fetched_index.empty:
+            save_frame(index_df, persist_path, INDEX_EOD_COLUMNS, date_columns=["date"])
+            print(
+                "[DataUpdate] Index batch persisted. "
+                f"start={start_date} end={end_date} index_count={len(index_keys)} rows={len(index_df)}"
+            )
 
-    retention_start = pd.Timestamp(update_calendar.min()) if len(update_calendar) > 0 else target_end.normalize()
     if not index_df.empty:
         index_df = index_df[pd.to_datetime(index_df["date"]) >= retention_start].copy()
     return index_df.sort_values(["index_key", "date"]).reset_index(drop=True), len(fetch_jobs)
@@ -501,31 +551,59 @@ def update_industry_data(
     stock_df: pd.DataFrame,
     universe_symbols: list[str],
     industry_map_df: pd.DataFrame,
+    existing_industry_daily_df: pd.DataFrame,
     config: dict,
     target_end: pd.Timestamp,
 ) -> tuple[pd.DataFrame, pd.DataFrame, str, int]:
     industry_cfg = config.get("industry", {})
     if not industry_cfg.get("enabled", True):
-        return industry_map_df, pd.DataFrame(columns=INDUSTRY_DAILY_COLUMNS), "disabled", 0
+        fallback_daily = (
+            existing_industry_daily_df
+            if not existing_industry_daily_df.empty
+            else pd.DataFrame(columns=INDUSTRY_DAILY_COLUMNS)
+        )
+        return industry_map_df, fallback_daily, "disabled", 0
 
-    try:
-        known_symbols = set(industry_map_df["symbol"].dropna().astype(str)) if not industry_map_df.empty else set()
-        missing_symbols = sorted(set(universe_symbols) - known_symbols)
+    known_symbols = set(industry_map_df["symbol"].dropna().astype(str)) if not industry_map_df.empty else set()
+    missing_symbols = sorted(set(universe_symbols) - known_symbols)
+    fetched_missing_symbols = 0
+    source_parts: list[str] = []
 
-        # 行业映射变化频率远低于日线，因此只补新股票；行业日线完全由本地股票数据聚合。
-        if missing_symbols:
+    # 行业映射变化频率远低于日线，因此只补新股票；行业日线完全由本地股票数据聚合。
+    if missing_symbols:
+        try:
             fetched_map = fetcher.fetch_industry_map(
                 symbols_filter=set(missing_symbols),
                 end_date=target_end.date().isoformat(),
             )
-            industry_map_df = pd.concat([industry_map_df, fetched_map], ignore_index=True)
-            industry_map_df = industry_map_df.drop_duplicates(subset=["symbol"], keep="last").reset_index(drop=True)
+            if not fetched_map.empty:
+                industry_map_df = pd.concat([industry_map_df, fetched_map], ignore_index=True)
+                industry_map_df = industry_map_df.drop_duplicates(subset=["symbol"], keep="last").reset_index(drop=True)
+                fetched_missing_symbols = int(fetched_map["symbol"].dropna().astype(str).nunique())
+            source_parts.append("cninfo_change")
+        except Exception as exc:
+            print(f"[DataUpdate] Industry map fetch failed, keep existing map. reason={exc}")
+            source_parts.append(f"keep_existing_map_failed_fetch:{exc}")
+    else:
+        source_parts.append("no_missing_symbols")
 
+    try:
         industry_daily_df = build_industry_daily_from_stock_data(stock_df, industry_map_df)
-        return industry_map_df, industry_daily_df, "cninfo_change+local_aggregate", len(missing_symbols)
     except Exception as exc:
-        print(f"[DataUpdate] Industry update failed, skip this round. reason={exc}")
-        return industry_map_df, pd.DataFrame(columns=INDUSTRY_DAILY_COLUMNS), f"failed: {exc}", 0
+        print(f"[DataUpdate] Industry daily aggregation failed, keep existing daily file. reason={exc}")
+        if not existing_industry_daily_df.empty:
+            source_parts.append(f"keep_existing_daily_failed_aggregate:{exc}")
+            return industry_map_df, existing_industry_daily_df, "|".join(source_parts), fetched_missing_symbols
+        source_parts.append(f"failed_no_existing_daily:{exc}")
+        return industry_map_df, pd.DataFrame(columns=INDUSTRY_DAILY_COLUMNS), "|".join(source_parts), fetched_missing_symbols
+
+    if industry_daily_df.empty and not existing_industry_daily_df.empty:
+        print("[DataUpdate] Industry daily aggregation returned empty result, keep existing daily file.")
+        source_parts.append("keep_existing_daily_empty_aggregate")
+        return industry_map_df, existing_industry_daily_df, "|".join(source_parts), fetched_missing_symbols
+
+    source_parts.append("local_aggregate")
+    return industry_map_df, industry_daily_df, "|".join(source_parts), fetched_missing_symbols
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -546,7 +624,7 @@ def main(argv: list[str] | None = None) -> None:
     stock_df = load_local_stock_data(stock_path)
     index_df = load_local_index_data(index_path)
     industry_map_df = load_local_industry_map(industry_map_path)
-    _ = load_local_industry_daily(industry_daily_path)
+    industry_daily_df = load_local_industry_daily(industry_daily_path)
     stale_symbol_registry = load_stale_symbols(stale_symbols_path)
     persisted_stale_symbols = set(stale_symbol_registry["symbol"].astype(str)) if not stale_symbol_registry.empty else set()
 
@@ -555,6 +633,9 @@ def main(argv: list[str] | None = None) -> None:
     effective_history_days = int(args.backfill_days) if args.backfill_days is not None else history_days
     if effective_history_days <= 0:
         raise ValueError("--backfill-days must be positive.")
+    job_chunk_size = int(config.get("fetch", {}).get("job_chunk_size", 100))
+    if job_chunk_size <= 0:
+        raise ValueError("fetch.job_chunk_size must be positive.")
     update_calendar = resolve_update_calendar(fetcher, target_end=target_end, history_days=effective_history_days)
 
     stale_cfg = config.get("universe", {}).get("filters", {})
@@ -603,6 +684,8 @@ def main(argv: list[str] | None = None) -> None:
         target_end=target_end,
         history_days=effective_history_days,
         backfill_history=bool(args.backfill_history),
+        persist_path=stock_path,
+        max_symbols_per_job=job_chunk_size,
     )
     stock_df, stock_turnover_job_count, stock_turnover_rows = update_stock_turnover_data(
         fetcher=fetcher,
@@ -611,6 +694,8 @@ def main(argv: list[str] | None = None) -> None:
         target_end=target_end,
         history_days=effective_history_days,
         backfill_history=bool(args.backfill_history),
+        persist_path=stock_path,
+        max_symbols_per_job=job_chunk_size,
     )
     save_frame(stock_df, stock_path, STOCK_EOD_COLUMNS, date_columns=["date"])
 
@@ -630,6 +715,8 @@ def main(argv: list[str] | None = None) -> None:
         target_end=target_end,
         history_days=effective_history_days,
         backfill_history=bool(args.backfill_history),
+        persist_path=index_path,
+        max_index_keys_per_job=job_chunk_size,
     )
     save_frame(index_df, index_path, INDEX_EOD_COLUMNS, date_columns=["date"])
 
@@ -638,6 +725,7 @@ def main(argv: list[str] | None = None) -> None:
         stock_df=stock_df,
         universe_symbols=universe_symbols,
         industry_map_df=industry_map_df,
+        existing_industry_daily_df=industry_daily_df,
         config=config,
         target_end=target_end,
     )
@@ -649,6 +737,7 @@ def main(argv: list[str] | None = None) -> None:
         "target_end_date": target_end.date().isoformat(),
         "backfill_history": bool(args.backfill_history),
         "effective_history_days": int(effective_history_days),
+        "fetch_job_chunk_size": int(job_chunk_size),
         "stock_path": str(stock_path),
         "stale_symbols_path": str(stale_symbols_path),
         "universe_snapshot_path": str(universe_snapshot_path),

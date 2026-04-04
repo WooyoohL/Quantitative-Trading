@@ -186,7 +186,11 @@ def main(argv: list[str] | None = None) -> None:
         "recommendation_price_filter_applied": recommendations.recommendation_price_filter_applied,
         "recommendation_pool_count": int(len(recommendations.recommendation_pool)),
         "recommendation_max_latest_price": recommendations.recommendation_max_latest_price,
-        "top_k_count": int(len(recommendations.latest_top_k)),
+        "review_top_k_target": int(recommendations.review_top_k_target),
+        "review_top_k_count": int(len(recommendations.review_top_k)),
+        "post_filter_applied": False,
+        "final_top_k_target": int(config["strategy"]["top_k"]),
+        "final_top_k_count": None,
         "n_train_samples": int(len(training_context.dataset_bundle.train_dataset)),
         "n_valid_samples": int(len(training_context.dataset_bundle.valid_dataset)),
         "n_test_samples": int(len(training_context.dataset_bundle.test_dataset)),
@@ -203,7 +207,7 @@ def main(argv: list[str] | None = None) -> None:
     save_run_metadata(output_dir, config, summary)
     print_inference_run_summary(
         summary,
-        recommendations.latest_top_k,
+        recommendations.review_top_k,
         output_dir,
         source_run_dir,
         checkpoint_path.name,
@@ -212,3 +216,4 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":
     run_cli(main, label="Inference")
+

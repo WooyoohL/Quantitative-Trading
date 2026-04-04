@@ -13,7 +13,8 @@ from app.cache import (
 from app.factories import build_dataset_builder, enabled_or_empty
 from app.runtime import load_st_symbol_set, log_step
 from data.dataset import AlphaDatasetBuilder, DatasetBundle
-from strategy.universe_selector import select_training_universe
+from data.splits import split_anchor_dates
+from strategy.universe_selector import select_training_universe_as_of
 
 
 @dataclass
@@ -107,9 +108,27 @@ def prepare_training_context(
                 dataset_bundle=cached_payload["dataset_bundle"],
             )
 
+    base_frame_for_selection = dataset_builder._build_base_feature_frame(
+        stock_df,
+        enabled_or_empty(config, "industry", industry_map_df),
+    )
+    selection_split_dates = split_anchor_dates(
+        base_frame_for_selection,
+        train_days=int(rolling_cfg.get("train_days", 80)),
+        valid_days=int(rolling_cfg.get("valid_days", 20)),
+        test_days=int(rolling_cfg.get("test_days", 20)),
+    )
+    selection_reference_date = max(selection_split_dates["train"])
+
     logger(f"训练模式: {training_mode}")
-    logger("开始筛选训练股票池")
-    selected_symbols, universe_report = select_training_universe(stock_df, universe_cfg)
+    logger(
+        f"开始筛选训练股票池: reference_end_date={pd.Timestamp(selection_reference_date).date()}"
+    )
+    selected_symbols, universe_report = select_training_universe_as_of(
+        stock_df,
+        universe_cfg,
+        reference_end_date=selection_reference_date,
+    )
     if not selected_symbols:
         raise ValueError("Universe selection returned zero symbols.")
     logger(f"训练股票池筛选完成: selected_symbols={len(selected_symbols)}")
@@ -173,3 +192,4 @@ def prepare_training_context(
         dataset_builder=dataset_builder,
         dataset_bundle=dataset_bundle,
     )
+

@@ -36,7 +36,19 @@ def _latest_continuous_tail_days(raw_df: pd.DataFrame, all_dates: list[pd.Timest
 
 
 def select_training_universe(raw_df: pd.DataFrame, config: dict) -> tuple[list[str], pd.DataFrame]:
+    return select_training_universe_as_of(raw_df, config)
+
+
+def select_training_universe_as_of(
+    raw_df: pd.DataFrame,
+    config: dict,
+    reference_end_date: pd.Timestamp | str | None = None,
+) -> tuple[list[str], pd.DataFrame]:
     lookback_days = int(config.get("lookback_days", 60))
+    scoped_df = raw_df.copy()
+    if reference_end_date is not None:
+        cutoff = pd.Timestamp(reference_end_date).normalize()
+        scoped_df = scoped_df[pd.to_datetime(scoped_df["date"]).dt.normalize() <= cutoff].copy()
 
     filters = config.get("filters", {})
     min_avg_turnover = float(filters.get("min_avg_turnover", 2e8))
@@ -47,12 +59,12 @@ def select_training_universe(raw_df: pd.DataFrame, config: dict) -> tuple[list[s
     min_continuous_tail_days = int(filters.get("min_continuous_tail_days", 0))
     training_max_latest_price = filters.get("training_max_latest_price")
 
-    latest_dates = sorted(pd.to_datetime(raw_df["date"]).unique())
+    latest_dates = sorted(pd.to_datetime(scoped_df["date"]).unique())
     if not latest_dates:
         return [], pd.DataFrame()
 
     active_dates = set(latest_dates[-lookback_days:])
-    recent = raw_df[raw_df["date"].isin(active_dates)].copy()
+    recent = scoped_df[scoped_df["date"].isin(active_dates)].copy()
     recent = recent.sort_values(["symbol", "date"]).reset_index(drop=True)
     recent["ret_1"] = recent.groupby("symbol")["close"].pct_change().fillna(0.0)
     recent["intraday_range"] = (recent["high"] - recent["low"]) / recent["close"].replace(0.0, pd.NA)
@@ -73,7 +85,7 @@ def select_training_universe(raw_df: pd.DataFrame, config: dict) -> tuple[list[s
     )
     agg["latest_close"] = agg["symbol"].map(latest_close)
 
-    continuous_tail_days = _latest_continuous_tail_days(raw_df, latest_dates)
+    continuous_tail_days = _latest_continuous_tail_days(scoped_df, latest_dates)
     agg["continuous_tail_days"] = agg["symbol"].map(continuous_tail_days).fillna(0).astype(int)
     agg["required_continuous_tail_days"] = min_continuous_tail_days
     agg["continuous_tail_pass"] = True
@@ -125,3 +137,4 @@ def select_training_universe(raw_df: pd.DataFrame, config: dict) -> tuple[list[s
 
     selected = filtered.sort_values(["pool_score", "avg_turnover"], ascending=[False, False]).reset_index(drop=True)
     return selected["symbol"].tolist(), selected
+
