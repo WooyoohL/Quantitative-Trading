@@ -18,15 +18,22 @@ Trading rule:
 
 ### 1. Prepare
 
+Run data update as a separate logged long task:
+
+```powershell
+python scripts/run_logged_command.py --log outputs/paper_trading/update_data.log --interval 600 -- python main.py update-data --config config.yaml
+```
+
+This command writes full update output to `outputs/paper_trading/update_data.log` and prints only one progress line every 10 minutes.
+
 Run:
 
 ```powershell
-python main.py paper-trade --config paper_trading.yaml --stage prepare
+python main.py paper-trade --config paper_trading.yaml --stage prepare --skip-update
 ```
 
 The prepare stage:
 
-- updates local EOD data;
 - executes pending sells and buys using the current trade date open price;
 - trains a new model on Monday and Wednesday nights, or whenever no source run exists;
 - runs inference with the current source run;
@@ -75,6 +82,8 @@ The finalize stage:
 
 ## Cloud Automation Notes
 
-The cloud task should run `prepare`, perform the event filter using web research and `strategy/post_filter.md`, write the decision CSV, then run `finalize`.
+The cloud task should run the logged data update command first. During this command, it should not actively poll in short intervals. It should rely on `scripts/run_logged_command.py`, which sleeps for 600 seconds between status checks and prints the latest non-empty log line.
+
+After data update finishes, the task should run `prepare --skip-update`, perform the event filter using web research and `strategy/post_filter.md`, write the decision CSV, then run `finalize`.
 
 The workflow is designed to start from a cloud workspace without local `outputs/runs`. If the configured source run is unavailable, the prepare stage trains a new source model before inference.

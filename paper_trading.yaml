@@ -13,6 +13,10 @@ paper_trading:
   current_source_run_path: "outputs/paper_trading/current_source_run.txt"
   event_filter_prompt_path: "strategy/post_filter.md"
 
+  update:
+    log_path: "outputs/paper_trading/update_data.log"
+    poll_interval_seconds: 600
+
   model:
     source_run: "outputs/runs/batch_20260405_001023_01_gru64x2_seed7"
     train_run_prefix: "paper"
