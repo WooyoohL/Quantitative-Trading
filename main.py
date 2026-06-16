@@ -213,6 +213,7 @@ def print_root_help() -> None:
     print("  batch        跑批量实验")
     print("  analyze      分析 batch 结果")
     print("  sweep        生成或运行模型超参数 sweep")
+    print("  paper-trade  运行每日模拟盘流程")
     print("")
     print("兼容模式:")
     print("  python main.py --config config.yaml")
@@ -262,6 +263,11 @@ def dispatch_main(argv: list[str] | None = None) -> None:
         from scripts.model_hparam_sweep import main as sweep_main
 
         sweep_main(sub_argv)
+        return
+    if subcommand == "paper-trade":
+        from scripts.paper_trading_daily import main as paper_trade_main
+
+        paper_trade_main(sub_argv)
         return
 
     train_main(argv)

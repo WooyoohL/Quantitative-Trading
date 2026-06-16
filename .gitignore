@@ -12,6 +12,7 @@ outputs/runs/
 outputs/batch_runs
 outputs/cache
 outputs/inference_runs
+outputs/paper_trading/
 outputs/latest_run.json
 outputs/*.pt
 outputs/*.npz

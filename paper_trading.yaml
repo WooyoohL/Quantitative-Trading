@@ -1,0 +1,42 @@
+base_config: "config.yaml"
+
+paper_trading:
+  initial_cash: 100000.0
+  max_positions: 3
+  target_gross_exposure: 0.70
+  lot_size: 100
+  retrain_weekdays:
+    - Monday
+    - Wednesday
+  state_path: "outputs/paper_trading/state.json"
+  workbook_path: "outputs/paper_trading/paper_account.xlsx"
+  current_source_run_path: "outputs/paper_trading/current_source_run.txt"
+  event_filter_prompt_path: "strategy/post_filter.md"
+
+  model:
+    source_run: "outputs/runs/batch_20260405_001023_01_gru64x2_seed7"
+    train_run_prefix: "paper"
+
+  inference:
+    output_prefix: "paper_signal"
+    checkpoint_name: "best.ckpt"
+
+  candidates:
+    model_review_limit: 20
+    heat_limit: 30
+    event_review_limit: 50
+    final_buy_count: 3
+
+  heat:
+    min_turnover: 300000000
+    max_price: 40.0
+    top_industry_pct: 0.20
+    top_ret1_pct: 0.08
+    top_ret3_pct: 0.10
+    volume_breakout_ratio: 1.8
+    volume_ratio_min: 1.5
+    overheat_3d_return: 0.18
+    overheat_limitup_days: 2
+    limit_up_threshold: 0.095
+    failed_limit_close_gap: 0.025
+    intraday_fade_threshold: 0.05
