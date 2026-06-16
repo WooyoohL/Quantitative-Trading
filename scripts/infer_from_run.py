@@ -11,8 +11,7 @@ from app.factories import build_trainer_config
 from app.interrupts import run_cli
 from app.reporting import assess_run_usability, print_inference_run_summary
 from app.runtime import configure_deterministic_training, load_config, resolve_training_frames, save_run_metadata
-from models.encoders import build_model
-from models.trainer import AlphaTrainer
+from models.trainer_factory import build_alpha_trainer
 from pipelines.context import prepare_training_context
 from pipelines.recommendation import generate_recommendation_outputs
 
@@ -81,7 +80,10 @@ def ensure_output_dir(source_run_dir: Path, requested_name: str | None) -> Path:
 def load_checkpoint_payload(checkpoint_path: Path, device: torch.device) -> dict:
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-    return torch.load(checkpoint_path, map_location=device)
+    try:
+        return torch.load(checkpoint_path, map_location=device, weights_only=False)
+    except TypeError:
+        return torch.load(checkpoint_path, map_location=device)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -113,10 +115,13 @@ def main(argv: list[str] | None = None) -> None:
 
     model_cfg = config.get("model", {})
     input_dim = len(training_context.dataset_bundle.feature_columns)
-    model, resolved_model_config = build_model(input_dim=input_dim, model_cfg=model_cfg)
-    trainer = AlphaTrainer(
-        model=model,
-        config=build_trainer_config(config),
+    seq_len = int(training_context.dataset_bundle.train_dataset.features.shape[1])
+    trainer, resolved_model_config = build_alpha_trainer(
+        input_dim=input_dim,
+        seq_len=seq_len,
+        feature_columns=training_context.dataset_bundle.feature_columns,
+        model_cfg=model_cfg,
+        trainer_config=build_trainer_config(config),
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
     )
 

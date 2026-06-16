@@ -1,0 +1,35 @@
+experiments:
+  - name: hist_gradient_boosting
+    overrides:
+      model:
+        name: hist_gradient_boosting
+
+  - name: ridge
+    overrides:
+      model:
+        name: ridge
+
+  - name: elasticnet
+    overrides:
+      model:
+        name: elasticnet
+
+  - name: linear_svr
+    overrides:
+      model:
+        name: linear_svr
+
+  - name: xgboost
+    overrides:
+      model:
+        name: xgboost
+
+  - name: lightgbm
+    overrides:
+      model:
+        name: lightgbm
+
+  - name: catboost
+    overrides:
+      model:
+        name: catboost
