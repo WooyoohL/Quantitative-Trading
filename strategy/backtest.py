@@ -6,6 +6,19 @@ import pandas as pd
 
 
 def backtest_top_k(scored_df: pd.DataFrame, top_k: int) -> pd.DataFrame:
+    output_columns = [
+        "date",
+        "strategy_return",
+        "market_return",
+        "excess_return",
+        "equity_curve",
+        "market_curve",
+        "relative_curve",
+    ]
+    if scored_df.empty:
+        print("[Backtest] no scored rows; return empty backtest report.")
+        return pd.DataFrame(columns=output_columns)
+
     rows: list[dict] = []
     for date, day_df in scored_df.groupby("date"):
         picks = day_df.nlargest(top_k, "score")
@@ -16,6 +29,10 @@ def backtest_top_k(scored_df: pd.DataFrame, top_k: int) -> pd.DataFrame:
                 "market_return": day_df["label"].mean(),
             }
         )
+
+    if not rows:
+        print("[Backtest] no grouped dates; return empty backtest report.")
+        return pd.DataFrame(columns=output_columns)
 
     report = pd.DataFrame(rows).sort_values("date")
     report["strategy_return"] = report["strategy_return"].fillna(0.0)

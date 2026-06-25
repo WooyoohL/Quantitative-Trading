@@ -11,10 +11,9 @@ from app.cache import (
     save_training_context_cache,
 )
 from app.factories import build_dataset_builder, enabled_or_empty
-from app.runtime import load_st_symbol_set, log_step
+from app.runtime import log_step
 from data.dataset import AlphaDatasetBuilder, DatasetBundle
-from data.splits import split_anchor_dates
-from strategy.universe_selector import select_training_universe_as_of
+from pipelines.training_universe import build_training_universe, resolve_training_mode
 
 
 @dataclass
@@ -36,46 +35,22 @@ def prepare_training_context(
     index_df: pd.DataFrame,
     industry_map_df: pd.DataFrame,
     industry_daily_df: pd.DataFrame,
-    time_block_shuffle: bool = False,
-    time_block_size: int | None = None,
     verbose: bool = True,
 ) -> TrainingContext:
     logger = log_step if verbose else (lambda _message: None)
 
-    universe_cfg = config.get("universe", {})
     training_cfg = config.get("training", {})
     rolling_cfg = config.get("rolling", {})
-    training_mode = str(training_cfg.get("mode", "market_rank")).strip().lower()
-    if training_mode not in {"market_rank", "trade"}:
-        raise ValueError(f"Unsupported training.mode={training_mode}. Expected 'market_rank' or 'trade'.")
-
-    required_continuous_tail_days = (
-        int(rolling_cfg.get("train_days", 80))
-        + int(rolling_cfg.get("valid_days", 20))
-        + int(rolling_cfg.get("test_days", 20))
-    )
-    if training_mode == "trade":
-        required_continuous_tail_days = 0
-
-    universe_cfg = dict(universe_cfg)
-    universe_filters = dict(universe_cfg.get("filters", {}))
-    universe_filters["min_continuous_tail_days"] = required_continuous_tail_days
-    if training_mode == "trade":
-        universe_filters["training_max_latest_price"] = universe_filters.get("max_latest_price")
-    else:
-        universe_filters.pop("training_max_latest_price", None)
-    universe_cfg["filters"] = universe_filters
-    universe_cfg["st_symbol_set"] = sorted(load_st_symbol_set(config))
+    training_mode = resolve_training_mode(config)
 
     dataset_builder = build_dataset_builder(
         config,
         verbose=verbose,
-        time_block_shuffle=time_block_shuffle,
-        time_block_size=time_block_size,
     )
 
     cache_cfg = dict(config.get("cache", {}))
-    cache_enabled = bool(cache_cfg.get("enabled", False))
+    use_candidate_universe = bool(training_cfg.get("use_candidate_universe", False))
+    cache_enabled = bool(cache_cfg.get("enabled", False)) and not use_candidate_universe
     cache_path: Path | None = None
     if cache_enabled:
         cache_key = build_training_context_cache_key(
@@ -84,8 +59,6 @@ def prepare_training_context(
             index_df=index_df,
             industry_map_df=industry_map_df,
             industry_daily_df=industry_daily_df,
-            time_block_shuffle=bool(time_block_shuffle),
-            time_block_size=time_block_size,
         )
         cache_dir = Path(cache_cfg.get("path", "outputs/cache/training_context"))
         cache_path = cache_dir / f"{cache_key}.pkl"
@@ -108,44 +81,18 @@ def prepare_training_context(
                 dataset_bundle=cached_payload["dataset_bundle"],
             )
 
-    base_frame_for_selection = dataset_builder._build_base_feature_frame(
-        stock_df,
-        enabled_or_empty(config, "industry", industry_map_df),
+    training_universe = build_training_universe(
+        config=config,
+        stock_df=stock_df,
+        industry_map_df=enabled_or_empty(config, "industry", industry_map_df),
+        dataset_builder=dataset_builder,
+        logger=logger,
     )
-    selection_split_dates = split_anchor_dates(
-        base_frame_for_selection,
-        train_days=int(rolling_cfg.get("train_days", 80)),
-        valid_days=int(rolling_cfg.get("valid_days", 20)),
-        test_days=int(rolling_cfg.get("test_days", 20)),
-    )
-    selection_reference_date = max(selection_split_dates["train"])
-
-    logger(f"训练模式: {training_mode}")
-    logger(
-        f"开始筛选训练股票池: reference_end_date={pd.Timestamp(selection_reference_date).date()}"
-    )
-    selected_symbols, universe_report = select_training_universe_as_of(
-        stock_df,
-        universe_cfg,
-        reference_end_date=selection_reference_date,
-    )
-    if not selected_symbols:
-        raise ValueError("Universe selection returned zero symbols.")
-    logger(f"训练股票池筛选完成: selected_symbols={len(selected_symbols)}")
-
+    selected_symbols = training_universe.selected_symbols
     selected_symbol_set = {str(symbol) for symbol in selected_symbols}
-    context_stock_df = stock_df
-    if training_mode == "trade":
-        context_stock_df = stock_df[stock_df["symbol"].astype(str).isin(selected_symbol_set)].copy()
-        logger(
-            f"Trade 模式使用训练池上下文: rows={len(context_stock_df)} "
-            f"symbols={context_stock_df['symbol'].nunique()}"
-        )
-    else:
-        logger(
-            f"Market-rank 模式使用全市场上下文: rows={len(context_stock_df)} "
-            f"symbols={context_stock_df['symbol'].nunique()}"
-        )
+    universe_filters = training_universe.universe_filters
+    universe_report = training_universe.universe_report
+    context_stock_df = training_universe.context_stock_df
 
     dataset_bundle = dataset_builder.build_bundle(
         raw_df=context_stock_df,

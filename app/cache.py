@@ -12,7 +12,7 @@ import pandas as pd
 from data.dataset import DatasetBundle, FeatureScaler, SequenceDataset
 
 
-CACHE_VERSION = "training_context_v4"
+CACHE_VERSION = "training_context_v5"
 
 
 def _frame_signature(df: pd.DataFrame, *, entity_col: str | None = None) -> dict[str, Any]:
@@ -36,8 +36,6 @@ def build_training_context_cache_key(
     index_df: pd.DataFrame,
     industry_map_df: pd.DataFrame,
     industry_daily_df: pd.DataFrame,
-    time_block_shuffle: bool,
-    time_block_size: int | None,
 ) -> str:
     payload = {
         "cache_version": CACHE_VERSION,
@@ -54,10 +52,6 @@ def build_training_context_cache_key(
         "index": config.get("index", {}),
         "industry": config.get("industry", {}),
         "peer": config.get("peer", {}),
-        "shuffle": {
-            "enabled": bool(time_block_shuffle),
-            "block_size": int(time_block_size or 0),
-        },
         "stock_sig": _frame_signature(stock_df, entity_col="symbol"),
         "index_sig": _frame_signature(index_df, entity_col="index_key"),
         "industry_map_sig": _frame_signature(industry_map_df, entity_col="symbol"),

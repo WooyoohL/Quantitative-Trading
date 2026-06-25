@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Quantitative Trading 控制台</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">QT</div>
+          <div>
+            <div class="brand-title">交易控制台</div>
+            <div class="brand-subtitle">本地模拟盘</div>
+          </div>
+        </div>
+        <nav class="nav">
+          <button class="nav-item active" data-view="overview">总览</button>
+          <button class="nav-item" data-view="candidates">候选池</button>
+          <button class="nav-item" data-view="inference">推理结果</button>
+          <button class="nav-item" data-view="trading">模拟交易</button>
+          <button class="nav-item" data-view="config">配置与运行</button>
+          <button class="nav-item" data-view="logs">日志</button>
+        </nav>
+      </aside>
+      <main class="content">
+        <header class="topbar">
+          <div>
+            <h1 id="page-title">总览</h1>
+            <p id="page-subtitle">读取 outputs 下的最新状态文件。</p>
+          </div>
+          <div class="top-actions">
+            <button class="btn" id="refresh-btn">刷新</button>
+          </div>
+        </header>
+        <section id="app" class="view"></section>
+      </main>
+    </div>
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

@@ -14,11 +14,7 @@ from torch.utils.data import DataLoader
 # from magma import Magma
 
 from data.dataset import SequenceDataset
-from metrics.selection import (
-    annotate_ic_gate_selection,
-    annotate_topk_valid_selection,
-    build_topk_valid_monitor_tuple,
-)
+from models.checkpoint_selection import CheckpointMonitor
 from models.loss_functions import (
     HeadWeightedPairwiseLoss,
     PearsonLoss,
@@ -140,13 +136,9 @@ class AlphaTrainer:
             worker_init_fn=self._seed_worker,
         )
 
-        checkpoint_mode = str(self.config.checkpoint_selection_mode).strip().lower()
-        use_composite_selection = checkpoint_mode == "ic_gate_composite"
-        use_topk_valid_selection = checkpoint_mode == "topk_valid"
-        monitor_daily_ic = use_topk_valid_selection
-        best_topk_monitor_tuple: tuple[float | int, ...] | None = None
+        checkpoint_monitor = CheckpointMonitor.from_config(self.config)
         checkpoint_dir = run_dir / "epoch_checkpoints"
-        if use_composite_selection or use_topk_valid_selection:
+        if checkpoint_monitor.needs_epoch_checkpoints:
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         epochs_without_improvement = 0
@@ -226,20 +218,12 @@ class AlphaTrainer:
             }
             self.history.append(record)
 
-            if use_topk_valid_selection:
-                current_topk_tuple = build_topk_valid_monitor_tuple(
-                    record,
-                    selection_min_excess_return=float(self.config.selection_min_excess_return),
-                    selection_min_positive_excess_rate=float(self.config.selection_min_positive_excess_rate),
-                    selection_min_daily_ic=float(self.config.selection_min_daily_ic),
-                    selection_min_head_daily_ic=float(self.config.selection_min_head_daily_ic),
-                    selection_max_drawdown_limit=float(self.config.selection_max_drawdown_limit),
-                )
-                improved = best_topk_monitor_tuple is None or current_topk_tuple > best_topk_monitor_tuple
-            else:
-                monitor_value = valid_daily_ic if monitor_daily_ic else valid_ic
-                best_monitor_value = self.monitor_best_valid_daily_ic if monitor_daily_ic else self.monitor_best_valid_ic
-                improved = monitor_value > best_monitor_value
+            improved = checkpoint_monitor.is_improved(
+                record,
+                self.config,
+                best_valid_ic=self.monitor_best_valid_ic,
+                best_valid_daily_ic=self.monitor_best_valid_daily_ic,
+            )
 
             if improved:
                 self.monitor_best_valid_ic = float(valid_ic)
@@ -247,8 +231,6 @@ class AlphaTrainer:
                 self.best_valid_ic = float(valid_ic)
                 self.best_valid_daily_ic = float(valid_daily_ic)
                 self.best_epoch = int(epoch)
-                if use_topk_valid_selection:
-                    best_topk_monitor_tuple = current_topk_tuple
                 epochs_without_improvement = 0
                 self._save_checkpoint(
                     run_dir / "best.ckpt",
@@ -259,7 +241,7 @@ class AlphaTrainer:
             else:
                 epochs_without_improvement += 1
 
-            if use_composite_selection or use_topk_valid_selection:
+            if checkpoint_monitor.needs_epoch_checkpoints:
                 self._save_checkpoint(
                     checkpoint_dir / f"epoch_{epoch:03d}.ckpt",
                     epoch=epoch,
@@ -285,57 +267,25 @@ class AlphaTrainer:
                 )
 
             if epochs_without_improvement >= int(self.config.early_stopping_patience):
-                if use_topk_valid_selection:
+                if checkpoint_monitor.uses_topk_valid_selection:
                     print(f"[Train] early stopping at epoch={epoch}, best_topk_valid_epoch={self.best_epoch}")
                 else:
-                    best_monitor_label = "best_valid_daily_ic" if monitor_daily_ic else "best_valid_ic"
-                    best_monitor_print = self.monitor_best_valid_daily_ic if monitor_daily_ic else self.monitor_best_valid_ic
-                    print(f"[Train] early stopping at epoch={epoch}, {best_monitor_label}={best_monitor_print:.4f}")
+                    best_monitor_print = (
+                        self.monitor_best_valid_daily_ic
+                        if checkpoint_monitor.monitors_daily_ic
+                        else self.monitor_best_valid_ic
+                    )
+                    print(
+                        f"[Train] early stopping at epoch={epoch}, "
+                        f"{checkpoint_monitor.best_monitor_label}={best_monitor_print:.4f}"
+                    )
                 break
 
         history_df = pd.DataFrame(self.history)
-        if use_composite_selection and not history_df.empty:
+        if checkpoint_monitor.needs_epoch_checkpoints and not history_df.empty:
             final_monitor_best_valid_ic = float(self.monitor_best_valid_ic)
             final_monitor_best_valid_daily_ic = float(self.monitor_best_valid_daily_ic)
-            history_df, selection_result = annotate_ic_gate_selection(
-                history_df,
-                selection_ic_tolerance=float(self.config.selection_ic_tolerance),
-                selection_weight_ic=float(self.config.selection_weight_ic),
-                selection_weight_top_k_return=float(self.config.selection_weight_top_k_return),
-                selection_weight_hit_rate=float(self.config.selection_weight_hit_rate),
-                selection_weight_excess_return=float(self.config.selection_weight_excess_return),
-            )
-            if selection_result is not None:
-                self.best_epoch = int(selection_result.epoch)
-                self.best_selection_score = float(selection_result.selection_score)
-                self.selection_candidate_count = int(selection_result.candidate_count)
-                self.best_selection_breakdown = dict(selection_result.breakdown)
-                self.load_checkpoint(checkpoint_dir / f"epoch_{self.best_epoch:03d}.ckpt")
-                self.monitor_best_valid_ic = final_monitor_best_valid_ic
-                self.monitor_best_valid_daily_ic = final_monitor_best_valid_daily_ic
-
-                selected_metrics = dict(self.history[self.best_epoch - 1])
-                selected_metrics["selection_score"] = float(self.best_selection_score)
-                selected_metrics["selection_candidate_count"] = int(self.selection_candidate_count)
-                selected_metrics["selection_breakdown"] = self.best_selection_breakdown
-                self._save_checkpoint(
-                    run_dir / "best.ckpt",
-                    epoch=self.best_epoch,
-                    metrics=selected_metrics,
-                    model_config=model_config,
-                )
-        elif use_topk_valid_selection and not history_df.empty:
-            final_monitor_best_valid_ic = float(self.monitor_best_valid_ic)
-            final_monitor_best_valid_daily_ic = float(self.monitor_best_valid_daily_ic)
-            history_df, selection_result = annotate_topk_valid_selection(
-                history_df,
-                selection_min_excess_return=float(self.config.selection_min_excess_return),
-                selection_min_positive_excess_rate=float(self.config.selection_min_positive_excess_rate),
-                selection_min_daily_ic=float(self.config.selection_min_daily_ic),
-                selection_min_head_daily_ic=float(self.config.selection_min_head_daily_ic),
-                selection_max_drawdown_limit=float(self.config.selection_max_drawdown_limit),
-                selection_head_top_n=int(self.config.selection_head_top_n),
-            )
+            history_df, selection_result = checkpoint_monitor.annotate_history(history_df, self.config)
             if selection_result is not None:
                 self.best_epoch = int(selection_result.epoch)
                 self.best_selection_score = float(selection_result.selection_score)

@@ -13,8 +13,11 @@ outputs/batch_runs
 outputs/cache
 outputs/inference_runs
 outputs/paper_trading/
+outputs/preprocessing_drift/
 outputs/latest_run.json
 outputs/*.pt
 outputs/*.npz
 outputs/*.csv
 outputs/*.md
+
+data/base_candidates.csv

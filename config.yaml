@@ -12,6 +12,7 @@ data:
   meta_path: "data/eod_daily_meta.json"
   stale_symbols_path: "data/stale_symbols.csv"
   universe_snapshot_path: "data/universe_snapshot.csv"
+  base_candidate_path: "data/base_candidates.csv"
   candidate_path: "data/current_candidates.csv"
   index_path: "data/index_daily.csv"
   industry_map_path: "data/industry_map.csv"
@@ -83,6 +84,8 @@ rolling:
 
 training:
   mode: "trade" # market_rank / trade
+  use_candidate_universe: true
+  universe_max_latest_price: 40.0  # null / None means no training-universe price cap; float overrides universe.filters.max_latest_price
 
 sequence:
   seq_len: 20

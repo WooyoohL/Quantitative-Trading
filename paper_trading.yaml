@@ -2,9 +2,14 @@ base_config: "config.yaml"
 
 paper_trading:
   initial_cash: 100000.0
-  max_positions: 3
+  max_positions: 8
   target_gross_exposure: 0.70
+  per_position_target_exposure: 0.175
+  watch_position_target_exposure: 0.10
   lot_size: 100
+  buy_slippage_rate: 0.001
+  sell_slippage_rate: 0.001
+  commission_rate: 0.0005
   retrain_weekdays:
     - Monday
     - Wednesday
@@ -18,18 +23,32 @@ paper_trading:
     poll_interval_seconds: 600
 
   model:
-    source_run: "outputs/runs/batch_20260405_001023_01_gru64x2_seed7"
+    source_run: "outputs/runs/attention_volume_ratio_features_20260617_01_01_attention_volume_ratio_1_3_5_7_seed1375"
     train_run_prefix: "paper"
 
   inference:
     output_prefix: "paper_signal"
     checkpoint_name: "best.ckpt"
 
+  candidate_models:
+    - label: "attention"
+      source_run: "outputs/runs/attention_volume_ratio_features_20260617_01_01_attention_volume_ratio_1_3_5_7_seed1375"
+      checkpoint_name: "best.ckpt"
+      output_prefix: "paper_signal_attention"
+      review_limit: 6
+    - label: "ridge"
+      source_run: "outputs/runs/volume_ratio_features_ridge_volume_ratio_features_20260617_01_01_ridge_volume_ratio_1_3_5_7_seed1375"
+      checkpoint_name: "best.ckpt"
+      output_prefix: "paper_signal_ridge"
+      review_limit: 6
+
   candidates:
-    model_review_limit: 20
-    heat_limit: 30
-    event_review_limit: 50
-    final_buy_count: 3
+    model_review_limit: 6
+    heat_add_limit: 30
+    event_review_limit: 12
+    final_buy_count: 4
+    watch_buy_count: 4
+    watch_review_rank_limit: 6
 
   heat:
     min_turnover: 300000000

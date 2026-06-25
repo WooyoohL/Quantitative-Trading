@@ -35,17 +35,6 @@ def parse_train_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Use data up to this trading date as T day, for example 2026-02-03.",
     )
-    parser.add_argument(
-        "--shuffle-time-blocks",
-        action="store_true",
-        help="Randomly shuffle non-overlapping time blocks on each symbol timeline while keeping order inside each block.",
-    )
-    parser.add_argument(
-        "--shuffle-block-size",
-        type=int,
-        default=None,
-        help="Block size used with --shuffle-time-blocks. Defaults to seq_len.",
-    )
     return parser.parse_args(argv)
 
 
@@ -61,8 +50,6 @@ def run_training(args: argparse.Namespace, config: dict, run_dir: Path, as_of_da
         index_df=index_df,
         industry_map_df=industry_map_df,
         industry_daily_df=industry_daily_df,
-        time_block_shuffle=bool(args.shuffle_time_blocks),
-        time_block_size=args.shuffle_block_size,
         verbose=False,
     )
 
@@ -132,6 +119,7 @@ def run_training(args: argparse.Namespace, config: dict, run_dir: Path, as_of_da
         "recommendation_pool_count": int(len(recommendations.recommendation_pool)),
         "recommendation_max_latest_price": recommendations.recommendation_max_latest_price,
         "right_side_filter_applied": recommendations.right_side_filter_applied,
+        "right_side_filter_fallback_to_unfiltered": recommendations.right_side_filter_fallback_to_unfiltered,
         "right_side_filter_before_count": recommendations.right_side_filter_before_count,
         "right_side_filter_after_count": recommendations.right_side_filter_after_count,
         "review_top_k_target": int(recommendations.review_top_k_target),
@@ -143,8 +131,6 @@ def run_training(args: argparse.Namespace, config: dict, run_dir: Path, as_of_da
         "n_valid_samples": int(len(training_context.dataset_bundle.valid_dataset)),
         "n_test_samples": int(len(training_context.dataset_bundle.test_dataset)),
         "seq_len": int(sequence_cfg.get("seq_len", 20)),
-        "time_block_shuffle": bool(args.shuffle_time_blocks),
-        "time_block_size": int(args.shuffle_block_size or sequence_cfg.get("seq_len", 20)),
         "feature_dim": int(input_dim),
         "model_name": str(resolved_model_config.get("name")),
         "feature_columns": training_context.dataset_bundle.feature_columns,
@@ -216,6 +202,7 @@ def print_root_help() -> None:
     print("  analyze      分析 batch 结果")
     print("  sweep        生成或运行模型超参数 sweep")
     print("  paper-trade  运行每日模拟盘流程")
+    print("  ui           启动本地 Web 控制台")
     print("")
     print("兼容模式:")
     print("  python main.py --config config.yaml")
@@ -270,6 +257,11 @@ def dispatch_main(argv: list[str] | None = None) -> None:
         from scripts.paper_trading_daily import main as paper_trade_main
 
         paper_trade_main(sub_argv)
+        return
+    if subcommand == "ui":
+        from app.ui_server import main as ui_main
+
+        ui_main(sub_argv)
         return
 
     train_main(argv)

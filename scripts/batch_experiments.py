@@ -161,7 +161,6 @@ class ExperimentResult:
     backtest_max_drawdown: float | None = None
     backtest_sharpe: float | None = None
     as_of_date: str | None = None
-    time_block_shuffle: bool | None = None
 
 
 def load_config(path: Path) -> dict:
@@ -179,8 +178,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-experiments", type=int, default=None)
     parser.add_argument("--python-exe", type=str, default=sys.executable)
     parser.add_argument("--as-of-date", type=str, default=None)
-    parser.add_argument("--shuffle-time-blocks", action="store_true")
-    parser.add_argument("--shuffle-block-size", type=int, default=None)
     parser.add_argument("--max-jobs", type=int, default=1, help="How many experiments to run concurrently. Default 1.")
     parser.add_argument("--no-dataset-cache", action="store_true")
     parser.add_argument("--dataset-cache-dir", type=Path, default=Path("outputs/cache/training_context"))
@@ -284,7 +281,6 @@ def extract_metrics(summary: dict[str, Any], experiment_config: dict[str, Any]) 
         "backtest_max_drawdown": backtest_metrics.get("max_drawdown"),
         "backtest_sharpe": backtest_metrics.get("sharpe_annualized"),
         "as_of_date": summary.get("as_of_date"),
-        "time_block_shuffle": summary.get("time_block_shuffle"),
     }
 
 
@@ -302,10 +298,6 @@ def run_experiment(
     command = [python_exe, "main.py", "--config", str(config_path), "--run-name", run_name]
     if args.as_of_date:
         command.extend(["--as-of-date", args.as_of_date])
-    if args.shuffle_time_blocks:
-        command.append("--shuffle-time-blocks")
-    if args.shuffle_block_size is not None:
-        command.extend(["--shuffle-block-size", str(args.shuffle_block_size)])
 
     if args.dry_run:
         log_path.write_text("DRY RUN\n" + " ".join(command), encoding="utf-8")
@@ -317,7 +309,6 @@ def run_experiment(
             config_path=str(config_path),
             log_path=str(log_path),
             as_of_date=args.as_of_date,
-            time_block_shuffle=bool(args.shuffle_time_blocks),
         )
 
     # 每个实验单独落日志，方便回头定位是哪组参数失败或效果异常。
@@ -342,7 +333,6 @@ def run_experiment(
             config_path=str(config_path),
             log_path=str(log_path),
             as_of_date=args.as_of_date,
-            time_block_shuffle=bool(args.shuffle_time_blocks),
         )
 
     run_dir = repo_root / "outputs" / "runs" / run_name
@@ -357,7 +347,6 @@ def run_experiment(
             log_path=str(log_path),
             run_dir=str(run_dir.resolve()),
             as_of_date=args.as_of_date,
-            time_block_shuffle=bool(args.shuffle_time_blocks),
         )
 
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -388,8 +377,6 @@ def main(argv: list[str] | None = None) -> None:
     print(f"[Batch] Max jobs: {max(1, int(args.max_jobs))}")
     if args.as_of_date:
         print(f"[Batch] As-of date: {args.as_of_date}")
-    if args.shuffle_time_blocks:
-        print(f"[Batch] Time block shuffle enabled. block_size={args.shuffle_block_size or base_config.get('sequence', {}).get('seq_len', 20)}")
     if int(args.max_jobs) > 2:
         print("[Batch] Warning: single GPU 下 max-jobs > 2 通常不会更快，可能只会增加争抢。")
 
