@@ -10,8 +10,6 @@ def build_dataset_builder(
     config: dict,
     *,
     verbose: bool = True,
-    time_block_shuffle: bool = False,
-    time_block_size: int | None = None,
 ) -> AlphaDatasetBuilder:
     sequence_cfg = config.get("sequence", {})
     data_cfg = config.get("data", {})
@@ -28,9 +26,6 @@ def build_dataset_builder(
         peer_min_overlap=int(peer_cfg.get("min_overlap", 20)),
         daily_cross_sectional_norm=bool(data_cfg.get("daily_cross_sectional_norm", False)),
         verbose=bool(verbose),
-        time_block_shuffle=bool(time_block_shuffle),
-        time_block_size=time_block_size,
-        random_seed=int(config.get("seed", 7)),
     )
 
 

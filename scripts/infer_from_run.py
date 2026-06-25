@@ -42,17 +42,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Optional output directory name under outputs/inference_runs.",
     )
-    parser.add_argument(
-        "--shuffle-time-blocks",
-        action="store_true",
-        help="Keep compatibility with the training pipeline. Usually leave disabled for live inference.",
-    )
-    parser.add_argument(
-        "--shuffle-block-size",
-        type=int,
-        default=None,
-        help="Block size used with --shuffle-time-blocks. Defaults to seq_len.",
-    )
     return parser.parse_args(argv)
 
 
@@ -94,6 +83,8 @@ def main(argv: list[str] | None = None) -> None:
         raise FileNotFoundError(f"Missing config.yaml in source run: {source_run_dir}")
 
     config = load_config(source_config_path)
+    if str(config.get("training", {}).get("mode", "")).strip().lower() == "trade":
+        config.setdefault("training", {}).setdefault("use_candidate_universe", True)
     configure_deterministic_training(int(config.get("seed", 7)))
 
     as_of_date = pd.Timestamp(args.as_of_date).normalize() if args.as_of_date else None
@@ -108,8 +99,6 @@ def main(argv: list[str] | None = None) -> None:
         index_df=index_df,
         industry_map_df=industry_map_df,
         industry_daily_df=industry_daily_df,
-        time_block_shuffle=bool(args.shuffle_time_blocks),
-        time_block_size=args.shuffle_block_size,
         verbose=False,
     )
 
@@ -191,6 +180,10 @@ def main(argv: list[str] | None = None) -> None:
         "recommendation_price_filter_applied": recommendations.recommendation_price_filter_applied,
         "recommendation_pool_count": int(len(recommendations.recommendation_pool)),
         "recommendation_max_latest_price": recommendations.recommendation_max_latest_price,
+        "right_side_filter_applied": recommendations.right_side_filter_applied,
+        "right_side_filter_fallback_to_unfiltered": recommendations.right_side_filter_fallback_to_unfiltered,
+        "right_side_filter_before_count": recommendations.right_side_filter_before_count,
+        "right_side_filter_after_count": recommendations.right_side_filter_after_count,
         "review_top_k_target": int(recommendations.review_top_k_target),
         "review_top_k_count": int(len(recommendations.review_top_k)),
         "post_filter_applied": False,

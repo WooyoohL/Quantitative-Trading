@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from app.config_values import optional_float
 from strategy.backtest import backtest_top_k, summarize_backtest
 
 
@@ -45,9 +46,9 @@ def compute_rightside_score(df: pd.DataFrame) -> pd.Series:
 def apply_right_side_filter(scored: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
     out = scored.copy()
     universe_filters = config.get("universe", {}).get("filters", {})
-    max_price = universe_filters.get("max_latest_price")
+    max_price = optional_float(universe_filters.get("max_latest_price"))
     if max_price is not None and "close" in out.columns:
-        out = out[pd.to_numeric(out["close"], errors="coerce") <= float(max_price)].copy()
+        out = out[pd.to_numeric(out["close"], errors="coerce") <= max_price].copy()
 
     filter_cfg = config.get("strategy", {}).get("right_side_filter", {})
     if not bool(filter_cfg.get("enabled", False)):

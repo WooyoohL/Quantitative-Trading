@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from app.config_values import optional_float
 from app.interrupts import run_cli
 from data.fetcher import (
     AkshareFetcher,
@@ -188,10 +189,13 @@ def build_candidate_frame_from_local_eod(
         candidate = candidate[~candidate["name"].astype(str).str.upper().str.contains("ST", na=False)].copy()
 
     min_latest_price = float(filters.get("min_latest_price", 2.0))
+    max_latest_price = optional_float(filters.get("max_latest_price"))
     candidate = candidate[
         candidate["last_price"].notna()
         & (candidate["last_price"] >= min_latest_price)
     ].copy()
+    if max_latest_price is not None:
+        candidate = candidate[candidate["last_price"] <= max_latest_price].copy()
 
     # 候选池只保留已经补到目标交易日的股票，避免停牌或缺数据股票混入训练和推理。
     if target_end is not None:
@@ -616,6 +620,7 @@ def main(argv: list[str] | None = None) -> None:
     stock_meta_path = Path(data_cfg.get("meta_path", "data/eod_daily_meta.json"))
     stale_symbols_path = Path(data_cfg.get("stale_symbols_path", "data/stale_symbols.csv"))
     universe_snapshot_path = Path(data_cfg.get("universe_snapshot_path", "data/universe_snapshot.csv"))
+    base_candidate_path = Path(data_cfg.get("base_candidate_path", "data/base_candidates.csv"))
     candidate_path = Path(data_cfg.get("candidate_path", "data/current_candidates.csv"))
     index_path = Path(data_cfg.get("index_path", "data/index_daily.csv"))
     industry_map_path = Path(data_cfg.get("industry_map_path", "data/industry_map.csv"))
@@ -640,32 +645,18 @@ def main(argv: list[str] | None = None) -> None:
 
     stale_cfg = config.get("universe", {}).get("filters", {})
     max_stale_trade_days = int(stale_cfg.get("max_stale_trade_days", 20))
-    stale_symbol_report = find_stale_symbols(
-        stock_df=stock_df,
-        update_calendar=update_calendar,
-        target_end=target_end,
-        max_stale_trade_days=max_stale_trade_days,
-    )
-    newly_stale_symbols = set(stale_symbol_report["symbol"].astype(str)) if not stale_symbol_report.empty else set()
-    stale_symbols = persisted_stale_symbols | newly_stale_symbols
-    if stale_symbols:
+    if persisted_stale_symbols:
         print(
-            "[DataUpdate] Excluded stale symbols from future fetch/candidate universe. "
-            f"threshold_trade_days={max_stale_trade_days} count={len(stale_symbols)} "
-            f"samples={(sorted(stale_symbols)[:5])}"
+            "[DataUpdate] Stale registry will be refreshed after data fetch. "
+            f"current_registry_count={len(persisted_stale_symbols)}"
         )
-    stale_registry_updates = build_stale_symbol_registry(stale_symbol_report)
-    if not stale_registry_updates.empty:
-        stale_symbol_registry = pd.concat([stale_symbol_registry, stale_registry_updates], ignore_index=True)
-    stale_symbol_registry = stale_symbol_registry.drop_duplicates(subset=["symbol"], keep="last").reset_index(drop=True)
-    save_stale_symbols(stale_symbol_registry, stale_symbols_path)
 
     universe_frame, universe_source = build_universe_frame(
         fetcher,
         config,
         existing_df=stock_df,
         snapshot_path=universe_snapshot_path,
-        extra_exclude_symbols=stale_symbols,
+        extra_exclude_symbols=None,
     )
     universe_symbols = universe_frame["symbol"].dropna().astype(str).tolist()
     if not universe_symbols:
@@ -699,12 +690,25 @@ def main(argv: list[str] | None = None) -> None:
     )
     save_frame(stock_df, stock_path, STOCK_EOD_COLUMNS, date_columns=["date"])
 
+    stale_symbol_report = find_stale_symbols(
+        stock_df=stock_df,
+        update_calendar=update_calendar,
+        target_end=target_end,
+        max_stale_trade_days=max_stale_trade_days,
+    )
+    newly_stale_symbols = set(stale_symbol_report["symbol"].astype(str)) - persisted_stale_symbols if not stale_symbol_report.empty else set()
+    stale_symbols = set(stale_symbol_report["symbol"].astype(str)) if not stale_symbol_report.empty else set()
+    stale_symbol_registry = build_stale_symbol_registry(stale_symbol_report)
+    save_stale_symbols(stale_symbol_registry, stale_symbols_path)
+
     candidate_frame = build_candidate_frame_from_local_eod(
         raw_df=stock_df,
         universe_frame=universe_frame,
         config=config,
         target_end=target_end,
     )
+    base_candidate_path.parent.mkdir(parents=True, exist_ok=True)
+    candidate_frame.to_csv(base_candidate_path, index=False, encoding="utf-8-sig")
     candidate_path.parent.mkdir(parents=True, exist_ok=True)
     candidate_frame.to_csv(candidate_path, index=False, encoding="utf-8-sig")
 
@@ -741,6 +745,7 @@ def main(argv: list[str] | None = None) -> None:
         "stock_path": str(stock_path),
         "stale_symbols_path": str(stale_symbols_path),
         "universe_snapshot_path": str(universe_snapshot_path),
+        "base_candidate_path": str(base_candidate_path),
         "candidate_path": str(candidate_path),
         "index_path": str(index_path),
         "industry_map_path": str(industry_map_path),
@@ -782,7 +787,7 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Candidates after local-close filter: {len(candidate_frame)}")
     print(f"Target end date: {target_end.date()}")
     print(f"Max stale trade days: {max_stale_trade_days}")
-    print(f"Stale symbols excluded: {len(stale_symbols)}")
+    print(f"Stale symbols after data fetch: {len(stale_symbols)}")
     print(f"Persisted stale symbols: {len(persisted_stale_symbols)}")
     print(f"Newly stale symbols: {len(newly_stale_symbols)}")
     print(f"Backfill mode: {bool(args.backfill_history)}")
@@ -800,7 +805,8 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Latest index date: {meta['latest_index_date']}")
     print(f"Latest industry date: {meta['latest_industry_date']}")
     print(f"Saved stock data to: {stock_path.resolve()}")
-    print(f"Saved candidates to: {candidate_path.resolve()}")
+    print(f"Saved base candidates to: {base_candidate_path.resolve()}")
+    print(f"Saved active candidates to: {candidate_path.resolve()}")
 
 
 if __name__ == "__main__":

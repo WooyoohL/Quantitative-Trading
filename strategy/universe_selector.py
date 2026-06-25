@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from app.config_values import optional_float
+
 
 def _rank_desc(series: pd.Series) -> pd.Series:
     return series.rank(method="average", ascending=False, pct=True)
@@ -105,8 +107,9 @@ def select_training_universe_as_of(
     agg["passes_min_n_days"] = agg["n_days"] >= min_n_days
     agg["passes_min_latest_price"] = agg["latest_close"] >= min_latest_price
     agg["passes_training_max_latest_price"] = True
+    training_max_latest_price = optional_float(training_max_latest_price)
     if training_max_latest_price is not None:
-        agg["passes_training_max_latest_price"] = agg["latest_close"] <= float(training_max_latest_price)
+        agg["passes_training_max_latest_price"] = agg["latest_close"] <= training_max_latest_price
 
     # Training samples now use a broad market universe and only remove bottom-tier symbols.
     eligibility_filter = (

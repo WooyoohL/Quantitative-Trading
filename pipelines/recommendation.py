@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from app.config_values import optional_float
 from app.runtime import (
     build_fetcher,
     build_rank_frame,
@@ -32,14 +33,15 @@ class RecommendationArtifacts:
     recommendation_price_filter_applied: bool
     recommendation_max_latest_price: float | None
     right_side_filter_applied: bool
+    right_side_filter_fallback_to_unfiltered: bool
     right_side_filter_before_count: int | None
     right_side_filter_after_count: int | None
 
 
-def _apply_right_side_filter(candidate_rank: pd.DataFrame, config: dict) -> tuple[pd.DataFrame, bool, int | None, int | None]:
+def _apply_right_side_filter(candidate_rank: pd.DataFrame, config: dict) -> tuple[pd.DataFrame, bool, bool, int | None, int | None]:
     filter_cfg = config.get("strategy", {}).get("right_side_filter", {})
     if not bool(filter_cfg.get("enabled", False)):
-        return candidate_rank, False, None, None
+        return candidate_rank, False, False, None, None
 
     out = candidate_rank.copy()
     before_count = len(out)
@@ -68,10 +70,10 @@ def _apply_right_side_filter(candidate_rank: pd.DataFrame, config: dict) -> tupl
 
     if filtered.empty:
         log_step("右侧过滤后候选池为空，回退到未过滤候选池。")
-        return out, False, before_count, before_count
+        return out, False, True, before_count, 0
 
     log_step(f"右侧过滤完成: before={before_count} after={len(filtered)}")
-    return filtered, True, before_count, len(filtered)
+    return filtered, True, False, before_count, len(filtered)
 
 
 def generate_recommendation_outputs(
@@ -167,9 +169,20 @@ def generate_recommendation_outputs(
         candidate_rank = build_rank_frame(signal_slice.copy(), "candidate_rank")
         candidate_rank["market_rank"] = pd.NA
         if as_of_date is None:
-            log_step(f"Trade 模式直接在训练池内推荐: count={len(candidate_rank)}")
+            if candidate_symbols:
+                before_count = len(candidate_rank)
+                candidate_rank = candidate_rank[candidate_rank["symbol"].astype(str).isin(candidate_symbols)].copy()
+                candidate_filter_applied = True
+                log_step(
+                    f"Trade 模式按统一候选库过滤: candidate_symbols={len(candidate_symbols)} "
+                    f"before={before_count} after={len(candidate_rank)} path={candidate_path}"
+                )
+            else:
+                log_step(f"Trade 模式直接在训练池内推荐: count={len(candidate_rank)}")
         else:
             log_step(f"Trade 模式历史截面排序完成: count={len(candidate_rank)}")
+        if candidate_rank.empty:
+            raise ValueError("Trade-mode inference became empty after candidate-universe filtering.")
 
     candidate_rank = candidate_rank[
         [
@@ -185,6 +198,11 @@ def generate_recommendation_outputs(
             "ret_5",
             "intraday_ret",
             "ma_gap_5",
+            "turnover_rate_1",
+            "volume_ratio_1_prev",
+            "volume_ratio_3_prev",
+            "volume_ratio_5_prev",
+            "volume_ratio_7_prev",
             "volume_ratio_5",
             "industry_ret_1_mean",
         ]
@@ -193,20 +211,26 @@ def generate_recommendation_outputs(
 
     recommendation_pool = candidate_rank.copy()
     universe_filters = config.get("universe", {}).get("filters", {})
-    max_recommend_price = universe_filters.get("max_latest_price")
+    max_recommend_price = optional_float(universe_filters.get("max_latest_price"))
     recommendation_price_filter_applied = False
     if max_recommend_price is not None:
         before_count = len(recommendation_pool)
-        recommendation_pool = recommendation_pool[recommendation_pool["close"] <= float(max_recommend_price)].copy()
+        recommendation_pool = recommendation_pool[recommendation_pool["close"] <= max_recommend_price].copy()
         recommendation_price_filter_applied = True
         log_step(
-            f"推荐阶段价格上限过滤完成: max_latest_price={float(max_recommend_price):.2f} "
+            f"推荐阶段价格上限过滤完成: max_latest_price={max_recommend_price:.2f} "
             f"before={before_count} after={len(recommendation_pool)}"
         )
     if recommendation_pool.empty:
         raise ValueError("Recommendation pool became empty after final price filtering.")
 
-    recommendation_pool, right_side_filter_applied, right_side_before_count, right_side_after_count = _apply_right_side_filter(
+    (
+        recommendation_pool,
+        right_side_filter_applied,
+        right_side_fallback_to_unfiltered,
+        right_side_before_count,
+        right_side_after_count,
+    ) = _apply_right_side_filter(
         recommendation_pool,
         config,
     )
@@ -240,6 +264,11 @@ def generate_recommendation_outputs(
             "ret_5",
             "intraday_ret",
             "ma_gap_5",
+            "turnover_rate_1",
+            "volume_ratio_1_prev",
+            "volume_ratio_3_prev",
+            "volume_ratio_5_prev",
+            "volume_ratio_7_prev",
             "volume_ratio_5",
             "industry_ret_1_mean",
         ]
@@ -276,8 +305,9 @@ def generate_recommendation_outputs(
         candidate_filter_applied=bool(candidate_filter_applied),
         candidate_symbol_count=int(len(candidate_symbols)) if as_of_date is None else None,
         recommendation_price_filter_applied=bool(recommendation_price_filter_applied),
-        recommendation_max_latest_price=float(max_recommend_price) if max_recommend_price is not None else None,
+        recommendation_max_latest_price=max_recommend_price,
         right_side_filter_applied=bool(right_side_filter_applied),
+        right_side_filter_fallback_to_unfiltered=bool(right_side_fallback_to_unfiltered),
         right_side_filter_before_count=right_side_before_count,
         right_side_filter_after_count=right_side_after_count,
     )

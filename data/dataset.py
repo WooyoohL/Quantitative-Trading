@@ -25,6 +25,10 @@ BASE_FEATURE_COLUMNS = [
     "range_pct",
     "turnover_rate_1",
     "turnover_rate_missing",
+    "volume_ratio_1_prev",
+    "volume_ratio_3_prev",
+    "volume_ratio_5_prev",
+    "volume_ratio_7_prev",
     "volume_ratio_5",
     "turnover_ratio_5",
     "volatility_5",
@@ -143,9 +147,6 @@ class AlphaDatasetBuilder:
         feature_columns: list[str] | None = None,
         daily_cross_sectional_norm: bool = False,
         verbose: bool = False,
-        time_block_shuffle: bool = False,
-        time_block_size: int | None = None,
-        random_seed: int = 7,
     ) -> None:
         self.seq_len = int(seq_len)
         self.label_horizon = int(label_horizon)
@@ -157,9 +158,6 @@ class AlphaDatasetBuilder:
         self.feature_columns = list(feature_columns or build_feature_columns(self.index_keys))
         self.daily_cross_sectional_norm = bool(daily_cross_sectional_norm)
         self.verbose = bool(verbose)
-        self.time_block_shuffle = bool(time_block_shuffle)
-        self.time_block_size = int(time_block_size or self.seq_len)
-        self.random_seed = int(random_seed)
 
     def _log(self, message: str) -> None:
         if self.verbose:
@@ -197,14 +195,6 @@ class AlphaDatasetBuilder:
         step_started = perf_counter()
         feature_frame = self._attach_industry_features(feature_frame, industry_daily_df)
         self._log(f"行业特征完成: rows={len(feature_frame)} 耗时={perf_counter() - step_started:.2f}s")
-
-        step_started = perf_counter()
-        feature_frame = self._maybe_shuffle_time_blocks(feature_frame)
-        if self.time_block_shuffle:
-            self._log(
-                f"时间块随机打乱完成: rows={len(feature_frame)} "
-                f"block_size={self.time_block_size} 耗时={perf_counter() - step_started:.2f}s"
-            )
 
         step_started = perf_counter()
         split_dates = split_anchor_dates(
@@ -359,6 +349,13 @@ class AlphaDatasetBuilder:
         frame["range_pct"] = (frame["high"] - frame["low"]) / frame["close"].replace(0.0, np.nan)
         frame["turnover_rate_1"] = frame["turnover_rate"]
         frame["turnover_rate_missing"] = frame["turnover_rate_1"].isna().astype(float)
+        prev_volume = grouped["volume"].shift(1)
+        frame["volume_ratio_1_prev"] = frame["volume"] / prev_volume.replace(0.0, np.nan)
+        for window in (3, 5, 7):
+            prev_volume_mean = grouped["volume"].transform(
+                lambda value, size=window: value.shift(1).rolling(size, min_periods=1).mean()
+            )
+            frame[f"volume_ratio_{window}_prev"] = frame["volume"] / prev_volume_mean.replace(0.0, np.nan)
         frame["volume_ratio_5"] = frame["volume"] / frame.groupby("symbol")["volume"].transform(
             lambda x: x.rolling(5, min_periods=2).mean()
         )
@@ -494,31 +491,6 @@ class AlphaDatasetBuilder:
         out["industry_board_missing"] = pd.to_numeric(out["industry_board_missing"], errors="coerce").fillna(1.0)
         return out
 
-    def _maybe_shuffle_time_blocks(self, frame: pd.DataFrame) -> pd.DataFrame:
-        if not self.time_block_shuffle or frame.empty:
-            return frame
-
-        rng = np.random.default_rng(self.random_seed)
-        block_size = max(1, int(self.time_block_size))
-        shuffled_groups: list[pd.DataFrame] = []
-
-        for symbol, symbol_df in frame.groupby("symbol", sort=False):
-            group = symbol_df.sort_values("date").reset_index(drop=True)
-            ordered_dates = pd.to_datetime(group["date"]).to_numpy()
-            blocks = [group.iloc[start : start + block_size].copy() for start in range(0, len(group), block_size)]
-
-            if len(blocks) <= 1:
-                shuffled_groups.append(group)
-                continue
-
-            shuffled = pd.concat([blocks[idx] for idx in rng.permutation(len(blocks))], ignore_index=True)
-            # 只打乱 20 天大块在时间轴上的位置，块内相对顺序保持不变。
-            shuffled["date"] = ordered_dates[: len(shuffled)]
-            shuffled_groups.append(shuffled)
-
-        out = pd.concat(shuffled_groups, ignore_index=True)
-        return out.sort_values(["symbol", "date"]).reset_index(drop=True)
-
     def _build_peer_map(self, frame: pd.DataFrame, train_dates: list[pd.Timestamp]) -> dict[str, list[tuple[str, float]]]:
         if not self.peer_enabled or not train_dates:
             return {}
@@ -628,55 +600,6 @@ class AlphaDatasetBuilder:
         )
         return out
 
-        relation_rows: list[dict[str, object]] = []
-        total_symbols = len(peer_map)
-
-        for idx, symbol in enumerate(all_symbols, start=1):
-            peers = peer_map.get(symbol, [])
-            if not peers:
-                continue
-
-            peer_rank = {peer_symbol: rank for rank, (peer_symbol, _) in enumerate(peers)}
-            peer_corr = {peer_symbol: corr for peer_symbol, corr in peers}
-            peer_rows_df = peer_source[peer_source["symbol"].isin(peer_rank)].copy()
-            if peer_rows_df.empty:
-                continue
-
-            peer_rows_df["peer_rank"] = peer_rows_df["symbol"].map(peer_rank)
-            peer_rows_df["peer_corr"] = peer_rows_df["symbol"].map(peer_corr)
-
-            aggregated = (
-                peer_rows_df.groupby("date", as_index=False)
-                .agg(
-                    peer_ret_1_mean=("ret_1", "mean"),
-                    peer_ret_5_mean=("ret_5", "mean"),
-                    peer_amplitude_mean=("amplitude_1", "mean"),
-                    peer_turnover_rate_mean=("turnover_rate_1", "mean"),
-                    peer_corr_mean=("peer_corr", "mean"),
-                    peer_count=("symbol", "count"),
-                )
-            )
-            top1 = (
-                peer_rows_df.sort_values(["date", "peer_rank"])
-                .groupby("date", as_index=False)
-                .first()[["date", "ret_1"]]
-                .rename(columns={"ret_1": "peer_top1_ret_1"})
-            )
-            aggregated = aggregated.merge(top1, on="date", how="left")
-            aggregated["symbol"] = symbol
-            values.extend(aggregated.to_dict("records"))
-
-            if self.verbose and (idx == 1 or idx % 50 == 0 or idx == len(all_symbols)):
-                self._log(f"peer 特征处理中: {idx}/{len(all_symbols)} symbols")
-
-        peer_feature_frame = pd.DataFrame(values)
-        out = out.drop(columns=PEER_FEATURE_COLUMNS, errors="ignore").merge(
-            peer_feature_frame,
-            on=["date", "symbol"],
-            how="left",
-        )
-        return out
-
     def _finalize_feature_frame(self, frame: pd.DataFrame) -> pd.DataFrame:
         out = frame.copy()
         out[self.feature_columns] = out[self.feature_columns].replace([np.inf, -np.inf], np.nan)
@@ -760,6 +683,11 @@ class AlphaDatasetBuilder:
                         "ret_5": float(group.at[idx, "ret_5"]) if "ret_5" in group.columns and not pd.isna(group.at[idx, "ret_5"]) else np.nan,
                         "intraday_ret": float(group.at[idx, "intraday_ret"]) if "intraday_ret" in group.columns and not pd.isna(group.at[idx, "intraday_ret"]) else np.nan,
                         "ma_gap_5": float(group.at[idx, "ma_gap_5"]) if "ma_gap_5" in group.columns and not pd.isna(group.at[idx, "ma_gap_5"]) else np.nan,
+                        "turnover_rate_1": float(group.at[idx, "turnover_rate_1"]) if "turnover_rate_1" in group.columns and not pd.isna(group.at[idx, "turnover_rate_1"]) else np.nan,
+                        "volume_ratio_1_prev": float(group.at[idx, "volume_ratio_1_prev"]) if "volume_ratio_1_prev" in group.columns and not pd.isna(group.at[idx, "volume_ratio_1_prev"]) else np.nan,
+                        "volume_ratio_3_prev": float(group.at[idx, "volume_ratio_3_prev"]) if "volume_ratio_3_prev" in group.columns and not pd.isna(group.at[idx, "volume_ratio_3_prev"]) else np.nan,
+                        "volume_ratio_5_prev": float(group.at[idx, "volume_ratio_5_prev"]) if "volume_ratio_5_prev" in group.columns and not pd.isna(group.at[idx, "volume_ratio_5_prev"]) else np.nan,
+                        "volume_ratio_7_prev": float(group.at[idx, "volume_ratio_7_prev"]) if "volume_ratio_7_prev" in group.columns and not pd.isna(group.at[idx, "volume_ratio_7_prev"]) else np.nan,
                         "volume_ratio_5": float(group.at[idx, "volume_ratio_5"]) if "volume_ratio_5" in group.columns and not pd.isna(group.at[idx, "volume_ratio_5"]) else np.nan,
                         "industry_ret_1_mean": float(group.at[idx, "industry_ret_1_mean"]) if "industry_ret_1_mean" in group.columns and not pd.isna(group.at[idx, "industry_ret_1_mean"]) else np.nan,
                     }
