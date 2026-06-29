@@ -1,0 +1,10 @@
+{
+  "pipeline": "independent_rolling_retrain_backtest",
+  "source_run_dir": "D:\\PyCharm 2025.3.3\\projects\\Quantitative Trading\\outputs\\retrain_backtest\\excess_cash_monwed_h12_nopricecap_20260629\\runs\\market_excess_h2\\train_20251126",
+  "train_date": "2025-11-26",
+  "signal_date": "2025-11-27",
+  "review_top_k_count": 20,
+  "universe_size": 590,
+  "feature_block_cache_path": "D:\\PyCharm 2025.3.3\\projects\\Quantitative Trading\\outputs\\retrain_backtest\\excess_cash_monwed_h12_nopricecap_20260629\\feature_blocks\\mon_wed_h2_train_20251126_use_20251126_20251128.pkl",
+  "feature_block_loaded_from_cache": false
+}

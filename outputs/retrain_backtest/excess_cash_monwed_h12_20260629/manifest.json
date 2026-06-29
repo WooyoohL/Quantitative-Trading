@@ -1,0 +1,35 @@
+{
+  "run_id": "20260629_225044",
+  "config": "D:\\PyCharm 2025.3.3\\projects\\Quantitative Trading\\config.yaml",
+  "output_dir": "D:\\PyCharm 2025.3.3\\projects\\Quantitative Trading\\outputs\\retrain_backtest\\excess_cash_monwed_h12_20260629",
+  "strategies": [
+    "mon_wed"
+  ],
+  "hold_periods": [
+    1,
+    2
+  ],
+  "label_mode": "market_excess",
+  "top_k": 3,
+  "start_date": "2025-11-20",
+  "end_date": "2026-06-25",
+  "use_days": 143,
+  "required_history_days": 135,
+  "sell_after_trading_days": 2,
+  "max_hold_period": 2,
+  "cash_filter": "enabled",
+  "score_quantile": 0.6,
+  "topk_mean_quantile": 0.6,
+  "score_gap_quantile": 0.5,
+  "min_position_exposure": 0.03,
+  "max_position_exposure": 0.175,
+  "max_gross_exposure": 0.7,
+  "buy_slippage_rate": 0.001,
+  "sell_slippage_rate": 0.001,
+  "commission_rate": 0.0005,
+  "plan_only": false,
+  "pipeline": "independent_rolling_retrain_backtest",
+  "shared_pipeline_invocation": false,
+  "test_days": 0,
+  "cleanup_target": "D:\\PyCharm 2025.3.3\\projects\\Quantitative Trading\\outputs\\retrain_backtest\\excess_cash_monwed_h12_20260629"
+}

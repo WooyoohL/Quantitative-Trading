@@ -2,12 +2,6 @@ __pycache__/
 *.py[cod]
 
 data/eod_daily.csv
-data/eod_daily_meta.json
-data/current_candidates.csv
-data/index_daily.csv
-data/industry_map.csv
-data/industry_daily.csv
-
 outputs/runs/
 outputs/batch_runs
 outputs/cache
@@ -20,4 +14,9 @@ outputs/*.npz
 outputs/*.csv
 outputs/*.md
 
-data/base_candidates.csv
+*.ckpt
+*.pt
+*.pth
+*.onnx
+outputs/retrain_backtest/**/epoch_checkpoints/
+outputs/retrain_backtest/**/feature_blocks/

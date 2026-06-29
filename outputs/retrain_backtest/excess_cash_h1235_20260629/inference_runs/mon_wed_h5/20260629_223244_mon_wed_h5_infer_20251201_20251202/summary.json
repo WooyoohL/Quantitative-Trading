@@ -1,0 +1,10 @@
+{
+  "pipeline": "independent_rolling_retrain_backtest",
+  "source_run_dir": "D:\\PyCharm 2025.3.3\\projects\\Quantitative Trading\\outputs\\retrain_backtest\\excess_cash_h1235_20260629\\runs\\market_excess_h5\\train_20251201",
+  "train_date": "2025-12-01",
+  "signal_date": "2025-12-02",
+  "review_top_k_count": 20,
+  "universe_size": 459,
+  "feature_block_cache_path": "D:\\PyCharm 2025.3.3\\projects\\Quantitative Trading\\outputs\\retrain_backtest\\excess_cash_h1235_20260629\\feature_blocks\\mon_wed_h5_train_20251201_use_20251201_20251202.pkl",
+  "feature_block_loaded_from_cache": false
+}

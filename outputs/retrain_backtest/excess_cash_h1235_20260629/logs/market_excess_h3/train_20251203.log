@@ -1,0 +1,8 @@
+﻿D:\anaconda3\envs\qt\lib\site-packages\torch\nn\modules\transformer.py:385: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+[Train] epoch=001/60 train_loss=0.0160 valid_loss=0.0025 valid_daily_ic=0.0426 valid_excess=-0.0118 valid_pos_excess=35.71%
+[Train] epoch=002/60 train_loss=0.0039 valid_loss=0.0025 valid_daily_ic=0.0414 valid_excess=0.0014 valid_pos_excess=50.00%
+[Train] epoch=003/60 train_loss=0.0034 valid_loss=0.0025 valid_daily_ic=0.0128 valid_excess=0.0092 valid_pos_excess=42.86%
+[Train] epoch=004/60 train_loss=0.0031 valid_loss=0.0024 valid_daily_ic=0.0392 valid_excess=0.0072 valid_pos_excess=46.43%
+[Train] epoch=005/60 train_loss=0.0029 valid_loss=0.0024 valid_daily_ic=0.0426 valid_excess=0.0040 valid_pos_excess=50.00%
+[Train] epoch=006/60 train_loss=0.0028 valid_loss=0.0024 valid_daily_ic=0.0344 valid_excess=-0.0031 valid_pos_excess=53.57%

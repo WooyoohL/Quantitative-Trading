@@ -1,0 +1,19 @@
+{
+  "label_mode": "market_excess",
+  "hold_period": 5,
+  "top_k": 3,
+  "enabled": true,
+  "score_quantile": 0.6,
+  "topk_mean_quantile": 0.6,
+  "score_gap_quantile": 0.5,
+  "min_score": 0.030268817394971847,
+  "min_topk_mean_score": 0.029902392998337746,
+  "min_score_gap": 0.004667635075747967,
+  "score_p50": 0.029037058353424072,
+  "score_p90": 0.033194761350750925,
+  "valid_daily_count": 26,
+  "valid_selected_count": 78,
+  "valid_topk_mean_label": 0.0187678215017793,
+  "valid_positive_label_rate": 0.5384615384615384,
+  "valid_selected_mean_label": 0.018767821286112454
+}
