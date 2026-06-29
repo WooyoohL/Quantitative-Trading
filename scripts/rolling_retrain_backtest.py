@@ -114,6 +114,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Skip buying when validation-calibrated score gates are not met.",
     )
     parser.add_argument(
+        "--cash-filter-policy",
+        choices=["hard", "tiered", "quality"],
+        default="hard",
+        help="hard keeps the original all-or-cash gate; tiered and quality map validation gates to position size.",
+    )
+    parser.add_argument(
         "--disable-price-cap",
         action="store_true",
         help="Disable universe.filters.max_latest_price only inside this independent backtest.",
@@ -122,6 +128,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--topk-mean-quantile", type=float, default=0.60)
     parser.add_argument("--score-gap-quantile", type=float, default=0.50)
     parser.add_argument("--min-position-exposure", type=float, default=0.03)
+    parser.add_argument("--mid-position-exposure", type=float, default=0.10)
     parser.add_argument("--max-position-exposure", type=float, default=0.175)
     parser.add_argument("--max-gross-exposure", type=float, default=0.70)
     parser.add_argument("--buy-slippage-rate", type=float, default=0.001)
@@ -427,6 +434,16 @@ def quantile_value(values: pd.Series | np.ndarray | list[float], quantile: float
     return float(series.quantile(q))
 
 
+def percentile_rank(value: Any, values: pd.Series | np.ndarray | list[float], default: float = 0.0) -> float:
+    numeric_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric_value):
+        return float(default)
+    series = pd.Series(values, dtype="float64").replace([np.inf, -np.inf], np.nan).dropna()
+    if series.empty:
+        return float(default)
+    return float((series <= float(numeric_value)).mean())
+
+
 def apply_label_mode_to_dataset(dataset: Any, label_mode: str) -> dict[str, Any]:
     mode = str(label_mode).strip().lower()
     if getattr(dataset, "targets", None) is None or dataset.meta.empty:
@@ -504,13 +521,22 @@ def build_selection_calibration(
             continue
         next_score = ranked["score"].iloc[int(top_k)] if len(ranked) > int(top_k) else selected["score"].iloc[-1]
         score_gap = float(selected["score"].iloc[0] - next_score)
+        top_score = float(pd.to_numeric(selected["score"], errors="coerce").iloc[0])
+        second_score = (
+            float(pd.to_numeric(ranked["score"], errors="coerce").iloc[1])
+            if len(ranked) > 1
+            else top_score
+        )
+        top1_margin = float(top_score - second_score)
         labels = pd.to_numeric(selected["label"], errors="coerce")
         daily_rows.append(
             {
                 "date": pd.Timestamp(signal_date).date().isoformat(),
+                "top_score": top_score,
                 "topk_mean_score": float(pd.to_numeric(selected["score"], errors="coerce").mean()),
                 "topk_min_score": float(pd.to_numeric(selected["score"], errors="coerce").min()),
                 "score_gap": score_gap,
+                "top1_margin": top1_margin,
                 "topk_mean_label": float(labels.mean()) if labels.notna().any() else float("nan"),
                 "positive_label": float((labels > 0.0).mean()) if labels.notna().any() else float("nan"),
             }
@@ -541,6 +567,10 @@ def build_selection_calibration(
         "min_score_gap": quantile_value(daily["score_gap"], score_gap_quantile),
         "score_p50": quantile_value(selected_scores, 0.50),
         "score_p90": quantile_value(selected_scores, 0.90),
+        "valid_top_scores": pd.to_numeric(daily["top_score"], errors="coerce").dropna().astype(float).tolist(),
+        "valid_topk_mean_scores": pd.to_numeric(daily["topk_mean_score"], errors="coerce").dropna().astype(float).tolist(),
+        "valid_score_gaps": pd.to_numeric(daily["score_gap"], errors="coerce").dropna().astype(float).tolist(),
+        "valid_top1_margins": pd.to_numeric(daily["top1_margin"], errors="coerce").dropna().astype(float).tolist(),
         "valid_daily_count": int(len(daily)),
         "valid_selected_count": int(len(selected_scores)),
         "valid_topk_mean_label": float(pd.to_numeric(daily["topk_mean_label"], errors="coerce").mean()),
@@ -590,8 +620,10 @@ def select_policy_picks(
     top_k: int,
     expected_use_date: pd.Timestamp,
     cash_filter_enabled: bool,
+    cash_filter_policy: str,
     calibration: dict[str, Any],
     min_position_exposure: float,
+    mid_position_exposure: float,
     max_position_exposure: float,
     max_gross_exposure: float,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
@@ -602,6 +634,13 @@ def select_policy_picks(
         all_ranked = all_ranked[all_ranked["signal_date"] == pd.Timestamp(expected_use_date).normalize()].copy()
     if "score" in all_ranked.columns:
         all_ranked = all_ranked.sort_values(["score", "symbol"], ascending=[False, True]).reset_index(drop=True)
+    top_score = float(pd.to_numeric(ranked["score"], errors="coerce").max()) if not ranked.empty else float("nan")
+    second_score = (
+        float(pd.to_numeric(all_ranked["score"], errors="coerce").iloc[1])
+        if len(all_ranked) > 1
+        else top_score
+    )
+    top1_margin = float(top_score - second_score) if not pd.isna(top_score) and not pd.isna(second_score) else float("nan")
     topk_mean = float(pd.to_numeric(ranked["score"], errors="coerce").mean()) if not ranked.empty else float("nan")
     min_score = float(pd.to_numeric(ranked["score"], errors="coerce").min()) if not ranked.empty else float("nan")
     if not ranked.empty and not all_ranked.empty:
@@ -616,9 +655,14 @@ def select_policy_picks(
 
     decision = {
         "cash_filter_enabled": bool(cash_filter_enabled),
+        "cash_filter_policy": str(cash_filter_policy),
         "cash_filter_pass": True,
         "skip_reason": "",
+        "signal_tier": "unfiltered",
+        "gate_pass_count": 0,
         "pre_filter_pick_count": int(len(ranked)),
+        "top_score": top_score,
+        "top1_margin": top1_margin,
         "topk_mean_score": topk_mean,
         "min_score": min_score,
         "score_gap": score_gap,
@@ -629,23 +673,132 @@ def select_policy_picks(
     reasons: list[str] = []
     if ranked.empty:
         reasons.append("empty_ranked_picks")
-    if cash_filter_enabled and calibration.get("enabled", False):
-        if pd.isna(min_score) or min_score < float(calibration.get("min_score", 0.0)):
-            reasons.append("score_below_validation_threshold")
-        if pd.isna(topk_mean) or topk_mean < float(calibration.get("min_topk_mean_score", 0.0)):
-            reasons.append("topk_mean_below_validation_threshold")
-        if pd.isna(score_gap) or score_gap < float(calibration.get("min_score_gap", 0.0)):
-            reasons.append("score_gap_below_validation_threshold")
-    elif cash_filter_enabled and not calibration.get("enabled", False):
+    score_ok = not pd.isna(min_score) and min_score >= float(calibration.get("min_score", 0.0))
+    top_score_ok = not pd.isna(top_score) and top_score >= float(calibration.get("min_score", 0.0))
+    topk_ok = not pd.isna(topk_mean) and topk_mean >= float(calibration.get("min_topk_mean_score", 0.0))
+    gap_ok = not pd.isna(score_gap) and score_gap >= float(calibration.get("min_score_gap", 0.0))
+    decision["gate_pass_count"] = int(score_ok) + int(topk_ok) + int(gap_ok)
+    top_score_pct = percentile_rank(top_score, calibration.get("valid_top_scores", []))
+    topk_mean_pct = percentile_rank(topk_mean, calibration.get("valid_topk_mean_scores", []))
+    score_gap_pct = percentile_rank(score_gap, calibration.get("valid_score_gaps", []))
+    top1_margin_pct = percentile_rank(top1_margin, calibration.get("valid_top1_margins", []))
+    quality_score = (
+        0.45 * top_score_pct
+        + 0.25 * topk_mean_pct
+        + 0.20 * score_gap_pct
+        + 0.10 * top1_margin_pct
+    )
+    decision["top_score_percentile"] = top_score_pct
+    decision["topk_mean_percentile"] = topk_mean_pct
+    decision["score_gap_percentile"] = score_gap_pct
+    decision["top1_margin_percentile"] = top1_margin_pct
+    decision["quality_score"] = float(quality_score)
+    min_score_threshold = float(calibration.get("min_score", 0.0))
+    min_topk_mean_threshold = float(calibration.get("min_topk_mean_score", 0.0))
+    min_score_gap_threshold = float(calibration.get("min_score_gap", 0.0))
+    relaxed_top_score_threshold = 0.70 * min_score_threshold
+    relaxed_topk_mean_threshold = 0.90 * min_topk_mean_threshold
+    separation_ok = bool(
+        gap_ok
+        or (
+            not pd.isna(top1_margin)
+            and top1_margin >= 0.50 * min_score_gap_threshold
+        )
+    )
+    decision["quality_min_top_score"] = relaxed_top_score_threshold
+    decision["quality_min_topk_mean"] = relaxed_topk_mean_threshold
+    decision["quality_separation_pass"] = separation_ok
+
+    if cash_filter_enabled and not calibration.get("enabled", False):
         reasons.append(str(calibration.get("reason", "calibration_unavailable")))
+
+    if cash_filter_enabled and calibration.get("enabled", False) and str(cash_filter_policy) == "hard":
+        if not score_ok:
+            reasons.append("score_below_validation_threshold")
+        if not topk_ok:
+            reasons.append("topk_mean_below_validation_threshold")
+        if not gap_ok:
+            reasons.append("score_gap_below_validation_threshold")
 
     if reasons:
         decision["cash_filter_pass"] = False
         decision["skip_reason"] = ";".join(reasons)
+        decision["signal_tier"] = "cash"
         empty = ranked.iloc[0:0].copy()
         empty["position_confidence"] = pd.Series(dtype="float64")
         empty["target_weight"] = pd.Series(dtype="float64")
         return empty, decision
+
+    if cash_filter_enabled and calibration.get("enabled", False) and str(cash_filter_policy) == "tiered":
+        if score_ok and topk_ok and gap_ok:
+            decision["signal_tier"] = "strong"
+            picks = apply_confidence_exposure(
+                ranked,
+                calibration=calibration,
+                min_position_exposure=mid_position_exposure,
+                max_position_exposure=max_position_exposure,
+                max_gross_exposure=max_gross_exposure,
+            )
+        elif score_ok and topk_ok:
+            decision["signal_tier"] = "medium"
+            picks = apply_confidence_exposure(
+                ranked,
+                calibration=calibration,
+                min_position_exposure=min_position_exposure,
+                max_position_exposure=mid_position_exposure,
+                max_gross_exposure=max_gross_exposure,
+            )
+        elif top_score_ok:
+            decision["signal_tier"] = "weak_top1"
+            picks = ranked.head(1).copy()
+            picks["position_confidence"] = picks["score"].apply(lambda value: score_confidence(value, calibration))
+            picks["target_weight"] = max(0.0, float(min_position_exposure))
+        else:
+            decision["cash_filter_pass"] = False
+            decision["skip_reason"] = "tiered_score_below_validation_threshold"
+            decision["signal_tier"] = "cash"
+            empty = ranked.iloc[0:0].copy()
+            empty["position_confidence"] = pd.Series(dtype="float64")
+            empty["target_weight"] = pd.Series(dtype="float64")
+            return empty, decision
+        decision["gross_exposure"] = float(pd.to_numeric(picks["target_weight"], errors="coerce").fillna(0.0).sum())
+        decision["cash_weight"] = float(max(0.0, 1.0 - decision["gross_exposure"]))
+        return picks, decision
+
+    if cash_filter_enabled and calibration.get("enabled", False) and str(cash_filter_policy) == "quality":
+        if score_ok and topk_ok and gap_ok:
+            decision["signal_tier"] = "quality_strong"
+            picks = apply_confidence_exposure(
+                ranked.head(int(top_k)),
+                calibration=calibration,
+                min_position_exposure=mid_position_exposure,
+                max_position_exposure=max_position_exposure,
+                max_gross_exposure=max_gross_exposure,
+            )
+        elif top_score_ok and topk_mean >= relaxed_topk_mean_threshold and separation_ok:
+            decision["signal_tier"] = "quality_medium"
+            picks = ranked.head(min(2, int(top_k))).copy()
+            picks["position_confidence"] = picks["score"].apply(lambda value: score_confidence(value, calibration))
+            picks["target_weight"] = 0.08
+            gross = float(picks["target_weight"].sum())
+            if gross > max_gross_exposure and gross > 0.0:
+                picks["target_weight"] = picks["target_weight"] * (float(max_gross_exposure) / gross)
+        elif top_score >= relaxed_top_score_threshold and separation_ok:
+            decision["signal_tier"] = "quality_weak_top1"
+            picks = ranked.head(1).copy()
+            picks["position_confidence"] = picks["score"].apply(lambda value: score_confidence(value, calibration))
+            picks["target_weight"] = max(0.0, float(min_position_exposure))
+        else:
+            decision["cash_filter_pass"] = False
+            decision["skip_reason"] = "quality_relaxed_score_or_separation_below_threshold"
+            decision["signal_tier"] = "cash"
+            empty = ranked.iloc[0:0].copy()
+            empty["position_confidence"] = pd.Series(dtype="float64")
+            empty["target_weight"] = pd.Series(dtype="float64")
+            return empty, decision
+        decision["gross_exposure"] = float(pd.to_numeric(picks["target_weight"], errors="coerce").fillna(0.0).sum())
+        decision["cash_weight"] = float(max(0.0, 1.0 - decision["gross_exposure"]))
+        return picks, decision
 
     picks = apply_confidence_exposure(
         ranked,
@@ -1629,9 +1782,22 @@ def evaluate_use_day(
         if market_return is None
         else portfolio_net_return - market_return * gross_exposure,
         "cash_filter_enabled": bool(selection_decision.get("cash_filter_enabled", False)),
+        "cash_filter_policy": selection_decision.get("cash_filter_policy", ""),
         "cash_filter_pass": bool(selection_decision.get("cash_filter_pass", True)),
+        "signal_tier": selection_decision.get("signal_tier", ""),
+        "gate_pass_count": selection_decision.get("gate_pass_count"),
         "skip_reason": selection_decision.get("skip_reason", ""),
         "pre_filter_pick_count": selection_decision.get("pre_filter_pick_count"),
+        "top_score": selection_decision.get("top_score"),
+        "top1_margin": selection_decision.get("top1_margin"),
+        "top_score_percentile": selection_decision.get("top_score_percentile"),
+        "topk_mean_percentile": selection_decision.get("topk_mean_percentile"),
+        "score_gap_percentile": selection_decision.get("score_gap_percentile"),
+        "top1_margin_percentile": selection_decision.get("top1_margin_percentile"),
+        "quality_score": selection_decision.get("quality_score"),
+        "quality_min_top_score": selection_decision.get("quality_min_top_score"),
+        "quality_min_topk_mean": selection_decision.get("quality_min_topk_mean"),
+        "quality_separation_pass": selection_decision.get("quality_separation_pass"),
         "topk_mean_score": selection_decision.get("topk_mean_score"),
         "min_score": selection_decision.get("min_score"),
         "score_gap": selection_decision.get("score_gap"),
@@ -2022,12 +2188,14 @@ def run_backtest(args: argparse.Namespace) -> Path:
         "sell_after_trading_days": int(args.sell_after_trading_days),
         "max_hold_period": int(max_hold_period),
         "cash_filter": str(args.cash_filter),
+        "cash_filter_policy": str(args.cash_filter_policy),
         "disable_price_cap": bool(args.disable_price_cap),
         "effective_max_latest_price": base_config.get("universe", {}).get("filters", {}).get("max_latest_price"),
         "score_quantile": float(args.score_quantile),
         "topk_mean_quantile": float(args.topk_mean_quantile),
         "score_gap_quantile": float(args.score_gap_quantile),
         "min_position_exposure": float(args.min_position_exposure),
+        "mid_position_exposure": float(args.mid_position_exposure),
         "max_position_exposure": float(args.max_position_exposure),
         "max_gross_exposure": float(args.max_gross_exposure),
         "buy_slippage_rate": float(args.buy_slippage_rate),
@@ -2174,8 +2342,10 @@ def run_backtest(args: argparse.Namespace) -> Path:
                 top_k=top_k,
                 expected_use_date=scheduled.use_date,
                 cash_filter_enabled=cash_filter_enabled,
+                cash_filter_policy=str(args.cash_filter_policy),
                 calibration=state.selection_calibration,
                 min_position_exposure=float(args.min_position_exposure),
+                mid_position_exposure=float(args.mid_position_exposure),
                 max_position_exposure=float(args.max_position_exposure),
                 max_gross_exposure=float(args.max_gross_exposure),
             )

@@ -30,7 +30,7 @@ def main(argv: list[str] | None = None) -> None:
     output_dir = args.output_dir
     if output_dir is None:
         stamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = Path("outputs") / "retrain_backtest" / f"server_monwed_h12_nopricecap_{stamp}"
+        output_dir = Path("outputs") / "retrain_backtest" / f"server_monwed_h12_quality_nopricecap_{stamp}"
 
     command = [
         "--config",
@@ -45,19 +45,23 @@ def main(argv: list[str] | None = None) -> None:
         "market_excess",
         "--cash-filter",
         "enabled",
+        "--cash-filter-policy",
+        "quality",
         "--disable-price-cap",
         "--score-quantile",
-        "0.60",
-        "--topk-mean-quantile",
-        "0.60",
-        "--score-gap-quantile",
         "0.50",
+        "--topk-mean-quantile",
+        "0.45",
+        "--score-gap-quantile",
+        "0.20",
         "--min-position-exposure",
-        "0.03",
+        "0.05",
+        "--mid-position-exposure",
+        "0.10",
         "--max-position-exposure",
         "0.175",
         "--max-gross-exposure",
-        "0.70",
+        "0.60",
         "--auto-start-after-warmup",
     ]
     if args.start_date:
