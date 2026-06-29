@@ -1,0 +1,20 @@
+﻿D:\anaconda3\envs\qt\lib\site-packages\torch\nn\modules\transformer.py:385: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+[Train] epoch=001/60 train_loss=0.0157 valid_loss=0.0009 valid_daily_ic=0.0265 valid_excess=-0.0069 valid_pos_excess=30.00%
+[Train] epoch=002/60 train_loss=0.0021 valid_loss=0.0008 valid_daily_ic=0.0443 valid_excess=-0.0036 valid_pos_excess=43.33%
+[Train] epoch=003/60 train_loss=0.0016 valid_loss=0.0008 valid_daily_ic=0.0338 valid_excess=-0.0060 valid_pos_excess=43.33%
+[Train] epoch=004/60 train_loss=0.0013 valid_loss=0.0008 valid_daily_ic=0.0349 valid_excess=-0.0053 valid_pos_excess=36.67%
+[Train] epoch=005/60 train_loss=0.0011 valid_loss=0.0009 valid_daily_ic=0.0296 valid_excess=-0.0054 valid_pos_excess=43.33%
+[Train] epoch=006/60 train_loss=0.0010 valid_loss=0.0008 valid_daily_ic=0.0162 valid_excess=-0.0042 valid_pos_excess=43.33%
+[Train] epoch=007/60 train_loss=0.0010 valid_loss=0.0008 valid_daily_ic=0.0403 valid_excess=0.0006 valid_pos_excess=50.00%
+[Train] epoch=008/60 train_loss=0.0009 valid_loss=0.0008 valid_daily_ic=0.0166 valid_excess=0.0001 valid_pos_excess=46.67%
+[Train] epoch=009/60 train_loss=0.0009 valid_loss=0.0008 valid_daily_ic=0.0048 valid_excess=-0.0045 valid_pos_excess=43.33%
+[Train] epoch=010/60 train_loss=0.0009 valid_loss=0.0008 valid_daily_ic=0.0273 valid_excess=-0.0020 valid_pos_excess=46.67%
+[Train] epoch=011/60 train_loss=0.0009 valid_loss=0.0008 valid_daily_ic=0.0238 valid_excess=-0.0018 valid_pos_excess=43.33%
+[Train] epoch=012/60 train_loss=0.0009 valid_loss=0.0008 valid_daily_ic=-0.0009 valid_excess=-0.0033 valid_pos_excess=36.67%
+[Train] epoch=013/60 train_loss=0.0009 valid_loss=0.0008 valid_daily_ic=0.0171 valid_excess=-0.0039 valid_pos_excess=33.33%
+[Train] epoch=014/60 train_loss=0.0009 valid_loss=0.0008 valid_daily_ic=0.0012 valid_excess=-0.0046 valid_pos_excess=30.00%
+[Train] epoch=015/60 train_loss=0.0008 valid_loss=0.0008 valid_daily_ic=0.0119 valid_excess=-0.0041 valid_pos_excess=36.67%
+[Train] epoch=016/60 train_loss=0.0008 valid_loss=0.0008 valid_daily_ic=0.0132 valid_excess=-0.0051 valid_pos_excess=33.33%
+[Train] epoch=017/60 train_loss=0.0008 valid_loss=0.0008 valid_daily_ic=0.0110 valid_excess=-0.0027 valid_pos_excess=33.33%
+[Train] early stopping at epoch=17, best_topk_valid_epoch=7

@@ -1,0 +1,132 @@
+seed: 1375
+use_real_data: true
+fallback_to_synthetic: false
+fetch:
+  max_workers: 32
+  request_timeout: 15
+  show_progress: true
+data:
+  path: data/eod_daily.csv
+  meta_path: data/eod_daily_meta.json
+  stale_symbols_path: data/stale_symbols.csv
+  universe_snapshot_path: data/universe_snapshot.csv
+  base_candidate_path: data/base_candidates.csv
+  candidate_path: data/current_candidates.csv
+  index_path: data/index_daily.csv
+  industry_map_path: data/industry_map.csv
+  industry_daily_path: data/industry_daily.csv
+  calendar_lookback_days: 420
+  trainable_history_days: 260
+  label_horizon: 5
+  daily_cross_sectional_norm: false
+fallback_universe_symbols:
+- 600000.SH
+- 600009.SH
+- 600028.SH
+- 600036.SH
+- 600048.SH
+- 600104.SH
+- 600276.SH
+- 600309.SH
+- 600519.SH
+- 600900.SH
+- 601009.SH
+- 601012.SH
+- 601166.SH
+- 601211.SH
+- 601225.SH
+- 601288.SH
+- 601319.SH
+- 601328.SH
+- 601688.SH
+- 601939.SH
+universe:
+  lookback_days: 60
+  exclude_symbols:
+  - 002231.SZ
+  filters:
+    main_board_only: true
+    exclude_st: true
+    max_stale_trade_days: 20
+    min_latest_price: 2.0
+    max_latest_price: 40.0
+    min_avg_turnover: 500000000
+    max_avg_intraday_range: 0.065
+    max_avg_abs_ret1: 0.035
+    min_n_days: 45
+index:
+  enabled: true
+  symbols:
+    sse: sh000001
+    szse: sz399001
+    hs300: sh000300
+    zz500: sh000905
+    cyb: sz399006
+industry:
+  enabled: true
+peer:
+  enabled: true
+  top_k: 5
+  lookback_days: 60
+  min_overlap: 20
+rolling:
+  train_days: 80
+  valid_days: 30
+  test_days: 0
+training:
+  mode: trade
+  use_candidate_universe: false
+  universe_max_latest_price: 40.0
+sequence:
+  seq_len: 20
+model:
+  name: attention
+  hidden_dim: 128
+  num_layers: 2
+  epochs: 60
+  lr: 0.0008
+  dropout: 0.3
+  mse_loss_weight: 1.0
+  pearson_loss_weight: 0.0
+  soft_rank_loss_weight: 0.0
+  pairwise_loss_weight: 0.0
+  ranking_tau: 1.0
+  pairwise_top_k_focus: 3
+  pairwise_head_boost: 3.0
+  pairwise_top_internal_boost: 1.5
+  pairwise_tail_weight: 0.0
+  attention_heads: 4
+  ff_multiplier: 2
+  max_seq_len: 64
+  weight_decay: 0.01
+  batch_size: 256
+  eval_batch_size: 512
+  log_every: 1
+  early_stopping_patience: 10
+  num_workers: 0
+  checkpoint_selection_mode: topk_valid
+  selection_top_k: 3
+  selection_ic_tolerance: 0.01
+  selection_weight_ic: 0.5
+  selection_weight_top_k_return: 0.25
+  selection_weight_hit_rate: 0.15
+  selection_weight_excess_return: 0.1
+  selection_head_top_n: 10
+  selection_min_excess_return: 0.0
+  selection_min_positive_excess_rate: 0.5
+  selection_min_daily_ic: 0.0
+  selection_min_head_daily_ic: -1.0
+  selection_max_drawdown_limit: -0.1
+strategy:
+  top_k: 3
+  right_side_filter:
+    enabled: true
+    min_ma_gap_5: -0.5
+    min_volume_ratio_5: 0.0
+    min_industry_ret_1_mean: -0.5
+execution:
+  initial_cash: 10000
+  max_positions: 3
+outputs:
+  run_dir: outputs/runs
+  latest_run_metadata: outputs/latest_run.json

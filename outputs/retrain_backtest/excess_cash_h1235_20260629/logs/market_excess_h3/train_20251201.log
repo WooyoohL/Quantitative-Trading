@@ -1,0 +1,25 @@
+﻿D:\anaconda3\envs\qt\lib\site-packages\torch\nn\modules\transformer.py:385: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+[Train] epoch=001/60 train_loss=0.0177 valid_loss=0.0025 valid_daily_ic=0.0215 valid_excess=-0.0075 valid_pos_excess=42.86%
+[Train] epoch=002/60 train_loss=0.0039 valid_loss=0.0027 valid_daily_ic=0.0450 valid_excess=-0.0011 valid_pos_excess=46.43%
+[Train] epoch=003/60 train_loss=0.0034 valid_loss=0.0024 valid_daily_ic=0.0328 valid_excess=-0.0007 valid_pos_excess=50.00%
+[Train] epoch=004/60 train_loss=0.0031 valid_loss=0.0024 valid_daily_ic=0.0406 valid_excess=0.0007 valid_pos_excess=50.00%
+[Train] epoch=005/60 train_loss=0.0029 valid_loss=0.0024 valid_daily_ic=0.0499 valid_excess=0.0024 valid_pos_excess=46.43%
+[Train] epoch=006/60 train_loss=0.0028 valid_loss=0.0024 valid_daily_ic=0.0171 valid_excess=0.0015 valid_pos_excess=50.00%
+[Train] epoch=007/60 train_loss=0.0027 valid_loss=0.0024 valid_daily_ic=0.0537 valid_excess=0.0054 valid_pos_excess=57.14%
+[Train] epoch=008/60 train_loss=0.0027 valid_loss=0.0025 valid_daily_ic=0.0350 valid_excess=0.0066 valid_pos_excess=42.86%
+[Train] epoch=009/60 train_loss=0.0027 valid_loss=0.0024 valid_daily_ic=0.0360 valid_excess=0.0015 valid_pos_excess=46.43%
+[Train] epoch=010/60 train_loss=0.0026 valid_loss=0.0024 valid_daily_ic=0.0548 valid_excess=0.0038 valid_pos_excess=42.86%
+[Train] epoch=011/60 train_loss=0.0026 valid_loss=0.0024 valid_daily_ic=0.0500 valid_excess=0.0093 valid_pos_excess=50.00%
+[Train] epoch=012/60 train_loss=0.0026 valid_loss=0.0024 valid_daily_ic=0.0151 valid_excess=0.0083 valid_pos_excess=57.14%
+[Train] epoch=013/60 train_loss=0.0026 valid_loss=0.0024 valid_daily_ic=0.0436 valid_excess=0.0068 valid_pos_excess=46.43%
+[Train] epoch=014/60 train_loss=0.0026 valid_loss=0.0024 valid_daily_ic=0.0183 valid_excess=0.0145 valid_pos_excess=53.57%
+[Train] epoch=015/60 train_loss=0.0026 valid_loss=0.0025 valid_daily_ic=0.0272 valid_excess=0.0072 valid_pos_excess=46.43%
+[Train] epoch=016/60 train_loss=0.0026 valid_loss=0.0025 valid_daily_ic=0.0586 valid_excess=-0.0016 valid_pos_excess=53.57%
+[Train] epoch=017/60 train_loss=0.0025 valid_loss=0.0024 valid_daily_ic=0.0549 valid_excess=0.0007 valid_pos_excess=53.57%
+[Train] epoch=018/60 train_loss=0.0025 valid_loss=0.0025 valid_daily_ic=0.0407 valid_excess=0.0010 valid_pos_excess=42.86%
+[Train] epoch=019/60 train_loss=0.0025 valid_loss=0.0025 valid_daily_ic=-0.0062 valid_excess=-0.0025 valid_pos_excess=46.43%
+[Train] epoch=020/60 train_loss=0.0025 valid_loss=0.0025 valid_daily_ic=0.0250 valid_excess=-0.0060 valid_pos_excess=35.71%
+[Train] epoch=021/60 train_loss=0.0025 valid_loss=0.0026 valid_daily_ic=0.0538 valid_excess=-0.0129 valid_pos_excess=32.14%
+[Train] epoch=022/60 train_loss=0.0025 valid_loss=0.0026 valid_daily_ic=0.0489 valid_excess=-0.0017 valid_pos_excess=46.43%
+[Train] early stopping at epoch=22, best_topk_valid_epoch=12

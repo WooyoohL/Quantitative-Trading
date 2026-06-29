@@ -1,0 +1,15 @@
+﻿D:\anaconda3\envs\qt\lib\site-packages\torch\nn\modules\transformer.py:385: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+[Train] epoch=001/60 train_loss=0.0131 valid_loss=0.0008 valid_daily_ic=0.0494 valid_excess=-0.0054 valid_pos_excess=36.67%
+[Train] epoch=002/60 train_loss=0.0019 valid_loss=0.0009 valid_daily_ic=0.0054 valid_excess=0.0001 valid_pos_excess=50.00%
+[Train] epoch=003/60 train_loss=0.0014 valid_loss=0.0008 valid_daily_ic=0.0033 valid_excess=-0.0027 valid_pos_excess=43.33%
+[Train] epoch=004/60 train_loss=0.0011 valid_loss=0.0008 valid_daily_ic=0.0171 valid_excess=-0.0011 valid_pos_excess=53.33%
+[Train] epoch=005/60 train_loss=0.0010 valid_loss=0.0009 valid_daily_ic=-0.0068 valid_excess=-0.0067 valid_pos_excess=46.67%
+[Train] epoch=006/60 train_loss=0.0009 valid_loss=0.0008 valid_daily_ic=0.0237 valid_excess=-0.0011 valid_pos_excess=50.00%
+[Train] epoch=007/60 train_loss=0.0009 valid_loss=0.0008 valid_daily_ic=0.0172 valid_excess=-0.0031 valid_pos_excess=46.67%
+[Train] epoch=008/60 train_loss=0.0009 valid_loss=0.0008 valid_daily_ic=0.0211 valid_excess=-0.0036 valid_pos_excess=46.67%
+[Train] epoch=009/60 train_loss=0.0009 valid_loss=0.0008 valid_daily_ic=0.0082 valid_excess=-0.0004 valid_pos_excess=46.67%
+[Train] epoch=010/60 train_loss=0.0008 valid_loss=0.0008 valid_daily_ic=0.0047 valid_excess=-0.0007 valid_pos_excess=46.67%
+[Train] epoch=011/60 train_loss=0.0008 valid_loss=0.0008 valid_daily_ic=0.0132 valid_excess=-0.0017 valid_pos_excess=43.33%
+[Train] epoch=012/60 train_loss=0.0008 valid_loss=0.0008 valid_daily_ic=0.0006 valid_excess=-0.0008 valid_pos_excess=53.33%
+[Train] early stopping at epoch=12, best_topk_valid_epoch=2
