@@ -26,6 +26,12 @@ from app.factories import build_dataset_builder, build_trainer_config
 from models.trainer_factory import build_alpha_trainer
 
 
+LABEL_DEFINITION = (
+    "signal_date T close features train on T+1 open buy to T+hold_period+1 open sell; "
+    "trade execution uses T+1 open buy to T+hold_period open sell"
+)
+
+
 @dataclass(frozen=True)
 class ScheduledUse:
     strategy: str
@@ -1002,7 +1008,7 @@ def open_to_open_label(frame: pd.DataFrame, label_horizon: int) -> pd.Series:
     ordered = ordered.sort_values(["symbol", "date"])
     grouped = ordered.groupby("symbol", group_keys=False)
     entry_open = grouped["open"].shift(-1)
-    exit_open = grouped["open"].shift(-int(label_horizon))
+    exit_open = grouped["open"].shift(-(int(label_horizon) + 1))
     label = exit_open / entry_open.replace(0.0, np.nan) - 1.0
     return label.reindex(frame.index)
 
@@ -1016,8 +1022,10 @@ def build_training_feature_block(
     industry_daily_df: pd.DataFrame,
     st_symbols: set[str],
     train_date: pd.Timestamp,
+    label_horizon: int,
 ) -> TrainingFeatureBlock:
     config = independent_config(base_config)
+    config.setdefault("data", {})["label_horizon"] = int(label_horizon)
     train_date = pd.Timestamp(train_date).normalize()
     stock_slice = slice_by_date(stock_df, train_date)
     assert_as_of_date_bound(stock_slice, train_date, "training stock slice")
@@ -1620,6 +1628,7 @@ def train_independent_model(
                 "signal_date": train_date.date().isoformat(),
                 "label_mode": str(label_mode),
                 "label_horizon": int(hold_period),
+                "label_definition": LABEL_DEFINITION,
                 "label_reports": label_reports,
                 "selection_calibration": selection_calibration,
                 "test_days": 0,
@@ -2141,6 +2150,18 @@ def load_existing_model_state(
     train_date = pd.Timestamp(train_date).normalize()
     run_label = policy_run_label(label_mode, hold_period)
     run_dir = out_dir / "runs" / run_label / f"train_{train_date.strftime('%Y%m%d')}"
+    summary_path = run_dir / "summary.json"
+    if not summary_path.exists():
+        raise ValueError(
+            f"Existing run summary is missing, cannot resume safely with the current label definition: {summary_path}"
+        )
+    existing_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    if existing_summary.get("label_definition") != LABEL_DEFINITION:
+        raise ValueError(
+            "Existing run label definition differs from the current code. "
+            f"run_dir={run_dir} existing={existing_summary.get('label_definition')} current={LABEL_DEFINITION}. "
+            "Start a new output directory instead of using --resume."
+        )
     config = load_yaml(run_dir / "config.yaml") if (run_dir / "config.yaml").exists() else independent_config(base_config)
     config.setdefault("data", {})
     config["data"]["label_horizon"] = int(hold_period)
@@ -2284,7 +2305,7 @@ def run_backtest(args: argparse.Namespace) -> Path:
         "strategies": strategies,
         "hold_periods": hold_periods,
         "label_mode": label_mode,
-        "label_definition": "signal_date T close features predict T+1 open buy to T+hold_period open sell",
+        "label_definition": LABEL_DEFINITION,
         "top_k": top_k,
         "start_date": eval_dates[0].date().isoformat(),
         "end_date": eval_dates[-1].date().isoformat(),
@@ -2391,7 +2412,10 @@ def run_backtest(args: argparse.Namespace) -> Path:
                     score_gap_quantile=float(args.score_gap_quantile),
                 )
             else:
-                feature_key = first_scheduled.train_date.date().isoformat()
+                feature_key = (
+                    f"{first_scheduled.train_date.date().isoformat()}|"
+                    f"{policy_run_label(label_mode, hold_period)}"
+                )
                 feature_block = training_feature_cache.get(feature_key)
                 if feature_block is None:
                     feature_block = build_training_feature_block(
@@ -2402,6 +2426,7 @@ def run_backtest(args: argparse.Namespace) -> Path:
                         industry_daily_df=industry_daily_df,
                         st_symbols=st_symbols,
                         train_date=first_scheduled.train_date,
+                        label_horizon=int(hold_period),
                     )
                     training_feature_cache[feature_key] = feature_block
                     trim_training_feature_cache(training_feature_cache)
