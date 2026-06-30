@@ -22,6 +22,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--start-date", type=str, default=None)
     parser.add_argument("--end-date", type=str, default=None)
+    parser.add_argument(
+        "--position-policy",
+        choices=["current", "recommended"],
+        default="recommended",
+        help="current keeps previous sizing; recommended increases quality medium/strong sizing.",
+    )
+    parser.add_argument(
+        "--weak-top1",
+        choices=["enabled", "disabled"],
+        default="disabled",
+        help="Whether to trade weak Top1 quality signals.",
+    )
     return parser.parse_args(argv)
 
 
@@ -30,7 +42,11 @@ def main(argv: list[str] | None = None) -> None:
     output_dir = args.output_dir
     if output_dir is None:
         stamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = Path("outputs") / "retrain_backtest" / f"server_monwed_h12_quality_nopricecap_{stamp}"
+        output_dir = (
+            Path("outputs")
+            / "retrain_backtest"
+            / f"server_monwed_h2_quality_{args.position_policy}_weaktop1_{args.weak_top1}_nopricecap_{stamp}"
+        )
 
     command = [
         "--config",
@@ -40,7 +56,7 @@ def main(argv: list[str] | None = None) -> None:
         "--strategies",
         "mon_wed",
         "--hold-periods",
-        "1,2",
+        "2",
         "--label-mode",
         "market_excess",
         "--cash-filter",
@@ -62,6 +78,10 @@ def main(argv: list[str] | None = None) -> None:
         "0.175",
         "--max-gross-exposure",
         "0.60",
+        "--position-policy",
+        str(args.position_policy),
+        "--weak-top1",
+        str(args.weak_top1),
         "--auto-start-after-warmup",
     ]
     if args.start_date:

@@ -131,6 +131,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--mid-position-exposure", type=float, default=0.10)
     parser.add_argument("--max-position-exposure", type=float, default=0.175)
     parser.add_argument("--max-gross-exposure", type=float, default=0.70)
+    parser.add_argument(
+        "--position-policy",
+        choices=["current", "recommended"],
+        default="current",
+        help="current keeps the historical quality sizing; recommended uses stronger sizing for quality medium/strong signals.",
+    )
+    parser.add_argument(
+        "--weak-top1",
+        choices=["enabled", "disabled"],
+        default="enabled",
+        help="Whether to trade weak Top1 quality signals. Disabled keeps the signal in diagnostics but sends it to cash.",
+    )
     parser.add_argument("--buy-slippage-rate", type=float, default=0.001)
     parser.add_argument("--sell-slippage-rate", type=float, default=0.001)
     parser.add_argument("--commission-rate", type=float, default=0.0005)
@@ -289,6 +301,18 @@ def date_mask(frame: pd.DataFrame, as_of_date: pd.Timestamp) -> pd.Series:
     if pd.api.types.is_datetime64_any_dtype(frame["date"]):
         return frame["date"] <= cutoff
     return pd.to_datetime(frame["date"]).dt.normalize() <= cutoff
+
+
+def assert_as_of_date_bound(frame: pd.DataFrame, as_of_date: pd.Timestamp, context: str) -> None:
+    if frame.empty or "date" not in frame.columns:
+        return
+    cutoff = pd.Timestamp(as_of_date).normalize()
+    max_date = pd.to_datetime(frame["date"]).dt.normalize().max()
+    if pd.notna(max_date) and pd.Timestamp(max_date).normalize() > cutoff:
+        raise ValueError(
+            f"Future data detected in {context}: max_date={pd.Timestamp(max_date).date()} "
+            f"as_of={cutoff.date()}."
+        )
 
 
 def unique_checkpoint_path(path: Path) -> Path:
@@ -614,6 +638,59 @@ def apply_confidence_exposure(
     return out
 
 
+def scale_to_total_exposure(
+    picks: pd.DataFrame,
+    target_gross_exposure: float,
+    max_gross_exposure: float,
+    max_position_exposure: float | None = None,
+) -> pd.DataFrame:
+    if picks.empty:
+        return picks.copy()
+    out = picks.copy()
+    base_weights = pd.to_numeric(out["target_weight"], errors="coerce").fillna(0.0).astype(float)
+    gross = float(base_weights.sum())
+    target = min(max(0.0, float(target_gross_exposure)), max(0.0, float(max_gross_exposure)))
+    if gross <= 0.0 or target <= 0.0:
+        return out
+
+    if max_position_exposure is None:
+        out["target_weight"] = base_weights * (target / gross)
+        return out
+
+    cap = max(0.0, float(max_position_exposure))
+    if cap <= 0.0:
+        out["target_weight"] = 0.0
+        return out
+
+    remaining = list(base_weights.index)
+    assigned = pd.Series(0.0, index=base_weights.index, dtype="float64")
+    remaining_target = target
+    while remaining and remaining_target > 0.0:
+        remaining_base = base_weights.loc[remaining]
+        remaining_gross = float(remaining_base.sum())
+        if remaining_gross <= 0.0:
+            break
+        scaled = remaining_base * (remaining_target / remaining_gross)
+        over_cap = scaled > cap
+        if not bool(over_cap.any()):
+            assigned.loc[remaining] = scaled
+            remaining = []
+            break
+        capped_index = list(scaled[over_cap].index)
+        assigned.loc[capped_index] = cap
+        remaining_target -= cap * len(capped_index)
+        remaining = [idx for idx in remaining if idx not in set(capped_index)]
+    out["target_weight"] = assigned.reindex(out.index).fillna(0.0)
+    return out
+
+
+def empty_policy_picks(ranked: pd.DataFrame) -> pd.DataFrame:
+    empty = ranked.iloc[0:0].copy()
+    empty["position_confidence"] = pd.Series(dtype="float64")
+    empty["target_weight"] = pd.Series(dtype="float64")
+    return empty
+
+
 def select_policy_picks(
     *,
     review: pd.DataFrame,
@@ -626,6 +703,8 @@ def select_policy_picks(
     mid_position_exposure: float,
     max_position_exposure: float,
     max_gross_exposure: float,
+    position_policy: str,
+    weak_top1_enabled: bool,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     ranked = select_review_picks(review, top_k=top_k, expected_use_date=expected_use_date)
     all_ranked = review.copy()
@@ -669,6 +748,8 @@ def select_policy_picks(
         "threshold_min_score": calibration.get("min_score"),
         "threshold_topk_mean_score": calibration.get("min_topk_mean_score"),
         "threshold_score_gap": calibration.get("min_score_gap"),
+        "position_policy": str(position_policy),
+        "weak_top1_enabled": bool(weak_top1_enabled),
     }
     reasons: list[str] = []
     if ranked.empty:
@@ -724,10 +805,7 @@ def select_policy_picks(
         decision["cash_filter_pass"] = False
         decision["skip_reason"] = ";".join(reasons)
         decision["signal_tier"] = "cash"
-        empty = ranked.iloc[0:0].copy()
-        empty["position_confidence"] = pd.Series(dtype="float64")
-        empty["target_weight"] = pd.Series(dtype="float64")
-        return empty, decision
+        return empty_policy_picks(ranked), decision
 
     if cash_filter_enabled and calibration.get("enabled", False) and str(cash_filter_policy) == "tiered":
         if score_ok and topk_ok and gap_ok:
@@ -750,6 +828,11 @@ def select_policy_picks(
             )
         elif top_score_ok:
             decision["signal_tier"] = "weak_top1"
+            if not bool(weak_top1_enabled):
+                decision["cash_filter_pass"] = False
+                decision["skip_reason"] = "weak_top1_disabled"
+                decision["signal_tier"] = "weak_top1_skipped"
+                return empty_policy_picks(ranked), decision
             picks = ranked.head(1).copy()
             picks["position_confidence"] = picks["score"].apply(lambda value: score_confidence(value, calibration))
             picks["target_weight"] = max(0.0, float(min_position_exposure))
@@ -757,10 +840,7 @@ def select_policy_picks(
             decision["cash_filter_pass"] = False
             decision["skip_reason"] = "tiered_score_below_validation_threshold"
             decision["signal_tier"] = "cash"
-            empty = ranked.iloc[0:0].copy()
-            empty["position_confidence"] = pd.Series(dtype="float64")
-            empty["target_weight"] = pd.Series(dtype="float64")
-            return empty, decision
+            return empty_policy_picks(ranked), decision
         decision["gross_exposure"] = float(pd.to_numeric(picks["target_weight"], errors="coerce").fillna(0.0).sum())
         decision["cash_weight"] = float(max(0.0, 1.0 - decision["gross_exposure"]))
         return picks, decision
@@ -775,16 +855,28 @@ def select_policy_picks(
                 max_position_exposure=max_position_exposure,
                 max_gross_exposure=max_gross_exposure,
             )
+            if str(position_policy) == "recommended":
+                picks = scale_to_total_exposure(
+                    picks,
+                    target_gross_exposure=0.50,
+                    max_gross_exposure=max_gross_exposure,
+                    max_position_exposure=max_position_exposure,
+                )
         elif top_score_ok and topk_mean >= relaxed_topk_mean_threshold and separation_ok:
             decision["signal_tier"] = "quality_medium"
             picks = ranked.head(min(2, int(top_k))).copy()
             picks["position_confidence"] = picks["score"].apply(lambda value: score_confidence(value, calibration))
-            picks["target_weight"] = 0.08
+            picks["target_weight"] = 0.10 if str(position_policy) == "recommended" else 0.08
             gross = float(picks["target_weight"].sum())
             if gross > max_gross_exposure and gross > 0.0:
                 picks["target_weight"] = picks["target_weight"] * (float(max_gross_exposure) / gross)
         elif top_score >= relaxed_top_score_threshold and separation_ok:
             decision["signal_tier"] = "quality_weak_top1"
+            if not bool(weak_top1_enabled):
+                decision["cash_filter_pass"] = False
+                decision["skip_reason"] = "weak_top1_disabled"
+                decision["signal_tier"] = "quality_weak_top1_skipped"
+                return empty_policy_picks(ranked), decision
             picks = ranked.head(1).copy()
             picks["position_confidence"] = picks["score"].apply(lambda value: score_confidence(value, calibration))
             picks["target_weight"] = max(0.0, float(min_position_exposure))
@@ -792,10 +884,7 @@ def select_policy_picks(
             decision["cash_filter_pass"] = False
             decision["skip_reason"] = "quality_relaxed_score_or_separation_below_threshold"
             decision["signal_tier"] = "cash"
-            empty = ranked.iloc[0:0].copy()
-            empty["position_confidence"] = pd.Series(dtype="float64")
-            empty["target_weight"] = pd.Series(dtype="float64")
-            return empty, decision
+            return empty_policy_picks(ranked), decision
         decision["gross_exposure"] = float(pd.to_numeric(picks["target_weight"], errors="coerce").fillna(0.0).sum())
         decision["cash_weight"] = float(max(0.0, 1.0 - decision["gross_exposure"]))
         return picks, decision
@@ -913,7 +1002,7 @@ def open_to_open_label(frame: pd.DataFrame, label_horizon: int) -> pd.Series:
     ordered = ordered.sort_values(["symbol", "date"])
     grouped = ordered.groupby("symbol", group_keys=False)
     entry_open = grouped["open"].shift(-1)
-    exit_open = grouped["open"].shift(-(int(label_horizon) + 1))
+    exit_open = grouped["open"].shift(-int(label_horizon))
     label = exit_open / entry_open.replace(0.0, np.nan) - 1.0
     return label.reindex(frame.index)
 
@@ -931,6 +1020,7 @@ def build_training_feature_block(
     config = independent_config(base_config)
     train_date = pd.Timestamp(train_date).normalize()
     stock_slice = slice_by_date(stock_df, train_date)
+    assert_as_of_date_bound(stock_slice, train_date, "training stock slice")
     keep_days = int(config.get("data", {}).get("trainable_history_days", 260))
     unique_dates = sorted(stock_slice["date"].drop_duplicates())
     if len(unique_dates) > keep_days:
@@ -1238,6 +1328,7 @@ def build_or_load_inference_feature_block(
         scaled_frame = pd.read_pickle(cache_path)
         if "date" in scaled_frame.columns:
             scaled_frame["date"] = pd.to_datetime(scaled_frame["date"]).dt.normalize()
+        assert_as_of_date_bound(scaled_frame, normalized_dates[-1], "cached inference feature block")
         return InferenceFeatureBlock(
             first_use_date=normalized_dates[0],
             last_use_date=normalized_dates[-1],
@@ -1252,6 +1343,7 @@ def build_or_load_inference_feature_block(
         date_mask(stock_df, max_use_date)
         & stock_df["symbol"].astype(str).isin(set(state.selected_symbols))
     ].copy()
+    assert_as_of_date_bound(raw_df, max_use_date, "inference raw data")
     keep_days = int(state.config.get("data", {}).get("trainable_history_days", 260))
     unique_dates = sorted(raw_df["date"].drop_duplicates())
     dates_to_first_use = [date for date in unique_dates if date <= first_use_date]
@@ -1282,6 +1374,7 @@ def build_or_load_inference_feature_block(
     scaled_frame = state.scaler.transform(feature_frame, state.feature_columns)
     if builder.daily_cross_sectional_norm:
         scaled_frame = builder._apply_daily_cross_sectional_norm(scaled_frame)
+    assert_as_of_date_bound(scaled_frame, max_use_date, "inference feature block")
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     scaled_frame.to_pickle(cache_path)
@@ -1335,6 +1428,14 @@ def infer_independent_model_block(
     scored_all["score"] = pred
     scored_all["name"] = scored_all["symbol"].astype(str).map(name_map).fillna("")
     scored_all["signal_date"] = pd.to_datetime(scored_all["signal_date"]).dt.normalize()
+    actual_signal_dates = set(scored_all["signal_date"].dropna().tolist())
+    expected_signal_dates = set(normalized_dates)
+    unexpected_dates = sorted(actual_signal_dates - expected_signal_dates)
+    if unexpected_dates:
+        raise ValueError(
+            "Inference produced dates outside the scheduled signal dates: "
+            + ",".join(pd.Timestamp(value).date().isoformat() for value in unexpected_dates)
+        )
 
     results: dict[pd.Timestamp, tuple[Path, pd.DataFrame]] = {}
     for use_date in normalized_dates:
@@ -1783,6 +1884,8 @@ def evaluate_use_day(
         else portfolio_net_return - market_return * gross_exposure,
         "cash_filter_enabled": bool(selection_decision.get("cash_filter_enabled", False)),
         "cash_filter_policy": selection_decision.get("cash_filter_policy", ""),
+        "position_policy": selection_decision.get("position_policy", ""),
+        "weak_top1_enabled": selection_decision.get("weak_top1_enabled", ""),
         "cash_filter_pass": bool(selection_decision.get("cash_filter_pass", True)),
         "signal_tier": selection_decision.get("signal_tier", ""),
         "gate_pass_count": selection_decision.get("gate_pass_count"),
@@ -2043,6 +2146,7 @@ def load_existing_model_state(
     config["data"]["label_horizon"] = int(hold_period)
 
     stock_slice = slice_by_date(stock_df, train_date)
+    assert_as_of_date_bound(stock_slice, train_date, "existing-run training stock slice")
     keep_days = int(config.get("data", {}).get("trainable_history_days", 260))
     unique_dates = sorted(stock_slice["date"].drop_duplicates())
     if len(unique_dates) > keep_days:
@@ -2180,6 +2284,7 @@ def run_backtest(args: argparse.Namespace) -> Path:
         "strategies": strategies,
         "hold_periods": hold_periods,
         "label_mode": label_mode,
+        "label_definition": "signal_date T close features predict T+1 open buy to T+hold_period open sell",
         "top_k": top_k,
         "start_date": eval_dates[0].date().isoformat(),
         "end_date": eval_dates[-1].date().isoformat(),
@@ -2198,6 +2303,8 @@ def run_backtest(args: argparse.Namespace) -> Path:
         "mid_position_exposure": float(args.mid_position_exposure),
         "max_position_exposure": float(args.max_position_exposure),
         "max_gross_exposure": float(args.max_gross_exposure),
+        "position_policy": str(args.position_policy),
+        "weak_top1": str(args.weak_top1),
         "buy_slippage_rate": float(args.buy_slippage_rate),
         "sell_slippage_rate": float(args.sell_slippage_rate),
         "commission_rate": float(args.commission_rate),
@@ -2348,6 +2455,8 @@ def run_backtest(args: argparse.Namespace) -> Path:
                 mid_position_exposure=float(args.mid_position_exposure),
                 max_position_exposure=float(args.max_position_exposure),
                 max_gross_exposure=float(args.max_gross_exposure),
+                position_policy=str(args.position_policy),
+                weak_top1_enabled=str(args.weak_top1) == "enabled",
             )
             daily_row, day_trades = evaluate_use_day(
                 scheduled=scheduled,
